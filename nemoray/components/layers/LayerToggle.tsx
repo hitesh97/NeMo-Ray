@@ -4,7 +4,6 @@ import type { LucideIcon } from "lucide-react";
 import {
   Cable,
   CircleSlash,
-  Radio,
   RadioTower,
   Spline,
   Tag,
@@ -17,7 +16,6 @@ import { Slider, Toggle, Tooltip } from "@/components/primitives";
 import { cn } from "@/lib/cn";
 
 const ICON: Record<LayerId, LucideIcon> = {
-  radioMap: Radio,
   sites: RadioTower,
   beams: Zap,
   arcs: Spline,

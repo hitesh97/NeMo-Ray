@@ -21,7 +21,7 @@ const COVERAGE_STATUS = {
 export function NetworkStatusPanel({ className }: { className?: string }) {
   const coverageStatus = useNemoStore((s) => s.coverageStatus);
   const sites = useNemoStore((s) => s.sites);
-  const radioMap = useNemoStore((s) => s.radioMap);
+  const deadZones = useNemoStore((s) => s.deadZones);
   const s = COVERAGE_STATUS[coverageStatus];
 
   const { total, online, offline, esn, ee } = useMemo(() => {
@@ -35,8 +35,7 @@ export function NetworkStatusPanel({ className }: { className?: string }) {
     };
   }, [sites]);
 
-  const criticalGaps =
-    radioMap?.deadZones.filter((d) => d.severity === "critical").length ?? 0;
+  const criticalGaps = deadZones.filter((d) => d.severity === "critical").length;
 
   return (
     <Panel className={cn("@container", className)}>
@@ -80,7 +79,7 @@ export function NetworkStatusPanel({ className }: { className?: string }) {
           <OperatorChip label="EE" count={ee} />
         </div>
 
-        {/* Critical coverage gaps from the live radio map */}
+        {/* Critical coverage gaps — dead zones derived from the active site set */}
         <div className="flex items-center justify-between border-t border-hairline pt-2.5">
           <span className="nm-eyebrow text-ink-faint">Critical coverage gaps</span>
           <span

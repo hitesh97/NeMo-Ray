@@ -59,15 +59,15 @@ state, or moving the hydration, causes panel flicker and re-render storms.
 
 ## Two parallel type worlds (a known confusion — document, don't "unify" casually)
 
-There are **two** type modules, and both define a `Proposal` and a `RadioMap` with
-**different shapes**. This is intentional, and conflating them is a classic hallucination:
+There are **two** type modules, and both define a `Proposal` with **different
+shapes**. This is intentional, and conflating them is a classic hallucination:
 
 - **`lib/types.ts`** — the **store ↔ map-seam contract**: `MapSurfaceProps`, `Site`,
-  `RadioMap`, `LayerState`, `CoverageStatus`, `RGB`, `CoverageLevel`. This is what
-  `MapMount` and the store speak.
+  `DeadZone`, `LayerState`, `CoverageStatus`, `RGB`, `CoverageLevel`. This is what
+  `MapMount` and the store speak. (The coverage-heatmap `RadioMap`/`CoverageCell`
+  types have been removed; the seam now carries `DeadZone[]` directly.)
 - **`types/coverage.ts`** — the **raw 3D-layer + mock-data shapes**: `CoveragePoint`,
-  `MastSite`, `DeadZone`, plus its own `Proposal`/`RadioMap`. Imported by the Cesium layers
-  (`MastBeams`, `SignalArcs`, `CoverageVolume`) and `lib/data/mock*`.
+  `MastSite`, `DeadZone`, plus its own `Proposal`/`RadioMap`. Imported by `lib/data/mock*`.
 
 **Pick by context:** store/seam work → `lib/types.ts`; raw Cesium layer geometry &
 mock generators → `types/coverage.ts`. Don't assume one is dead and delete it — grep first.

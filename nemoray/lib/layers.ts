@@ -8,7 +8,6 @@ export interface LayerMeta {
 
 /** Map-layer toggles shown in the left rail (order matters). */
 export const LAYER_META: LayerMeta[] = [
-  { id: "radioMap", label: "Bandwidth Streams", hint: "Sionna RT coverage / downlink heatmap" },
   { id: "sites", label: "Site Locations", hint: "Cell tower positions" },
   { id: "beams", label: "Coverage Beams", hint: "Per-site emission shafts" },
   { id: "arcs", label: "User Density", hint: "Subscriber load arcs" },
@@ -18,7 +17,6 @@ export const LAYER_META: LayerMeta[] = [
 ];
 
 export const DEFAULT_LAYERS: Record<LayerId, LayerState> = {
-  radioMap: { visible: true, opacity: 0.85 },
   sites: { visible: true, opacity: 1 },
   beams: { visible: true, opacity: 0.9 },
   arcs: { visible: true, opacity: 0.7 },

@@ -44,28 +44,18 @@ export interface Site {
   load: number;
 }
 
-// ── coverage / radio map ────────────────────────────────────────────────────
+// ── coverage / dead zones ───────────────────────────────────────────────────
+/**
+ * Discrete signal bands. Retained for the dormant colour ramp in
+ * `lib/geo/color.ts` (`LEVEL_RGB`, `mbpsToLevel`); the coverage heatmap that
+ * consumed it has been removed.
+ */
 export type CoverageLevel =
   | "critical"
   | "low"
   | "medium"
   | "good"
   | "excellent";
-
-export interface CoverageCell {
-  id: string;
-  /** Grid indices. */
-  gx: number;
-  gy: number;
-  /** Normalised cell centre for the placeholder. */
-  n: Norm;
-  /** Real-world cell centre for the Cesium map. */
-  centroid: LngLat;
-  dlMbps: number;
-  rsrpDbm: number;
-  level: CoverageLevel;
-  congested: boolean;
-}
 
 export interface DeadZone {
   id: string;
@@ -76,21 +66,6 @@ export interface DeadZone {
   centroid: LngLat;
   severity: "minor" | "major" | "critical";
   causeSiteId?: SiteId;
-}
-
-export interface RadioMap {
-  id: string;
-  scenarioId: ScenarioId;
-  bbox: BBox;
-  gridW: number;
-  gridH: number;
-  resolutionM: number;
-  cells: CoverageCell[];
-  deadZones: DeadZone[];
-  /** Optional georeferenced raster (real Sionna output) the Cesium map can drape. */
-  raster?: { url: string; bounds: BBox; width: number; height: number };
-  generatedAt: number;
-  inputs: { deactivatedSiteIds: SiteId[] };
 }
 
 export type CoverageStatus = "idle" | "computing" | "ready" | "error";
@@ -205,7 +180,6 @@ export interface Proposal {
 
 // ── map surface contract ────────────────────────────────────────────────────
 export type LayerId =
-  | "radioMap"
   | "beams"
   | "arcs"
   | "sites"
@@ -233,7 +207,7 @@ export interface MapViewState {
  */
 export interface MapSurfaceProps {
   sites: Site[];
-  radioMap: RadioMap | null;
+  deadZones: DeadZone[];
   selectedSiteId: SiteId | null;
   hoveredSiteId: SiteId | null;
   deactivatedSiteIds: SiteId[];

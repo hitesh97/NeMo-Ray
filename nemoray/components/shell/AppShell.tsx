@@ -1,7 +1,6 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { MapMount } from "@/components/map/MapMount";
 import { AgentRunner } from "@/components/agent/AgentRunner";
 import { LeftRail } from "@/components/panels/LeftRail";
 import { RightRail } from "@/components/panels/RightRail";
@@ -17,7 +16,8 @@ import { TopBar } from "./TopBar";
  * bar over a middle row (collapsible left rail · persistent map · collapsible
  * right rail) above a collapsible bottom bar. Each rail carries its own tab
  * strip to swap what it shows (Network/Scenarios · Chat/cuOpt). `children`
- * overlay on top of the always-mounted map per workspace.
+ * render in the centre stage per workspace. (The Cesium map surface was
+ * removed; the centre is now a plain backdrop for workspace content.)
  */
 export function AppShell({ children }: { children: ReactNode }) {
   const panels = useNemoStore((s) => s.panels);
@@ -41,9 +41,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             <LeftRail />
           </CollapsiblePanel>
 
-          <main className="relative min-w-0 flex-1 overflow-hidden">
-            <MapMount className="absolute inset-0" />
-            {/* per-workspace overlay */}
+          <main className="relative min-w-0 flex-1 overflow-hidden bg-bg nm-grid-bg">
+            {/* per-workspace content (the map surface was removed) */}
             <div className="pointer-events-none absolute inset-0 z-10 flex p-3">
               {children}
             </div>

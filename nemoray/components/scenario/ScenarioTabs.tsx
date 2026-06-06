@@ -67,7 +67,7 @@ export function ScenarioTabs({ className }: { className?: string }) {
 
   const activeScenarioId = useNemoStore((s) => s.activeScenarioId);
   const sites = useNemoStore((s) => s.sites);
-  const radioMap = useNemoStore((s) => s.radioMap);
+  const deadZones = useNemoStore((s) => s.deadZones);
   const deactivatedCount = useNemoStore((s) => s.deactivatedSiteIds.length);
   const active = MOCK_SCENARIOS[activeScenarioId];
 
@@ -79,8 +79,8 @@ export function ScenarioTabs({ className }: { className?: string }) {
     { label: "Offline", value: String(sites.length - onAir), critical: deactivatedCount > 0 },
     {
       label: "Critical gaps",
-      value: String(radioMap?.deadZones.filter((d) => d.severity === "critical").length ?? 0),
-      critical: (radioMap?.deadZones.filter((d) => d.severity === "critical").length ?? 0) > 0,
+      value: String(deadZones.filter((d) => d.severity === "critical").length),
+      critical: deadZones.filter((d) => d.severity === "critical").length > 0,
     },
   ];
 

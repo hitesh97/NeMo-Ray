@@ -31,7 +31,9 @@ import type {
 } from "@/lib/types";
 
 // Synchronous first paint — no await, deterministic.
-const INITIAL_RADIO_MAP = computeMockRadioMap(DEFAULT_SCENARIO, []);
+const INITIAL_DEAD_ZONES = computeDeadZones(
+  MOCK_SCENARIOS[DEFAULT_SCENARIO].seedDeactivated,
+);
 
 export interface PanelState {
   left: boolean;
@@ -51,7 +53,7 @@ interface NemoState {
   deactivatedSiteIds: SiteId[];
   selectedSiteId: SiteId | null;
   hoveredSiteId: SiteId | null;
-  radioMap: RadioMap | null;
+  deadZones: DeadZone[];
   coverageStatus: CoverageStatus;
   proposals: Proposal[];
   selectSite(id: SiteId | null): void;
@@ -158,7 +160,7 @@ export const useNemoStore = create<NemoState>((set, get) => ({
   deactivatedSiteIds: MOCK_SCENARIOS[DEFAULT_SCENARIO].seedDeactivated,
   selectedSiteId: null,
   hoveredSiteId: null,
-  radioMap: INITIAL_RADIO_MAP,
+  deadZones: INITIAL_DEAD_ZONES,
   coverageStatus: "ready",
   proposals: MOCK_PROPOSALS,
 
@@ -194,10 +196,11 @@ export const useNemoStore = create<NemoState>((set, get) => ({
 
   recomputeCoverage: async () => {
     set({ coverageStatus: "computing" });
-    const { activeScenarioId, deactivatedSiteIds } = get();
+    const { deactivatedSiteIds, sites } = get();
     try {
-      const rm = await getRadioMap(activeScenarioId, deactivatedSiteIds);
-      set({ radioMap: rm, coverageStatus: "ready" });
+      // A touch of latency so the "computing…" state is visible on deactivation.
+      await delay(280);
+      set({ deadZones: computeDeadZones(deactivatedSiteIds, sites), coverageStatus: "ready" });
     } catch {
       set({ coverageStatus: "error" });
     }
