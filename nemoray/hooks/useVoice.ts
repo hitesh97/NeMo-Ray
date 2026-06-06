@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { probeVoice, synthesize, transcribe } from "@/lib/api/voice";
+import { probeVoice, transcribe } from "@/lib/api/voice";
 import { useNemoStore } from "@/store";
 
 /** Pick a MediaRecorder mime type the current browser actually supports. */
@@ -20,6 +20,24 @@ function pickMimeType(): string {
   return "";
 }
 
+export type VadState =
+  | "idle"
+  | "listening"
+  | "speech_detected"
+  | "in_speech"
+  | "post_speech_silence"
+  | "committing";
+
+// ── VAD constants ──
+const SPEECH_THRESHOLD_RMS   = 0.045;
+const NOISE_FLOOR_RMS        = 0.020;
+const SPEECH_CONFIRM_MS      = 180;
+const PRE_SPEECH_TIMEOUT_MS  = 8_000;
+const SHORT_UTT_THRESHOLD_MS = 2_000;
+const LONG_SILENCE_MS        = 2_500;
+const SHORT_SILENCE_MS       = 1_200;
+const MAX_TICK_DELTA_MS      = 100;
+
 export interface UseVoice {
   /** Whether ElevenLabs is wired (probed from the server). */
   available: boolean;
@@ -28,10 +46,12 @@ export interface UseVoice {
   speaking: boolean;
   /** Live input level 0..1 (RMS) while recording — drives the meter. */
   level: number;
-  startRecording(): Promise<void>;
-  stopRecording(): void;
+  vadState: VadState;
+  toggleRecording(): Promise<void>;
+  cancelRecording(): void;
   /** Speak arbitrary text (queued, sequential playback). */
   speak(text: string): Promise<void>;
+  stopSpeaking(): void;
 }
 
 export function useVoice(): UseVoice {
@@ -44,6 +64,8 @@ export function useVoice(): UseVoice {
   const setVoiceRecording = useNemoStore((s) => s.setVoiceRecording);
   const setVoiceTranscribing = useNemoStore((s) => s.setVoiceTranscribing);
   const setVoiceSpeaking = useNemoStore((s) => s.setVoiceSpeaking);
+  const voiceVadState = useNemoStore((s) => s.voiceVadState);
+  const setVoiceVadState = useNemoStore((s) => s.setVoiceVadState);
   const addOperatorMessage = useNemoStore((s) => s.addOperatorMessage);
   const requestAgentRun = useNemoStore((s) => s.requestAgentRun);
 
@@ -58,9 +80,16 @@ export function useVoice(): UseVoice {
   const rafRef = useRef<number | null>(null);
 
   // ── playback refs ──
-  const playEl = useRef<HTMLAudioElement | null>(null);
   const playQueue = useRef<string[]>([]);
   const playing = useRef(false);
+
+  // ── VAD refs ──
+  const vadStateRef         = useRef<VadState>("idle");
+  const speechConfirmAccRef = useRef(0);
+  const totalSpeechMsRef    = useRef(0);
+  const silenceStartRef     = useRef<number | null>(null);
+  const recordingStartRef   = useRef<number>(0);
+  const prevTickTimeRef     = useRef<number>(0);
 
   // Probe availability once on mount.
   useEffect(() => {
@@ -82,22 +111,6 @@ export function useVoice(): UseVoice {
     setLevel(0);
   }, []);
 
-  const runMeter = useCallback(() => {
-    const analyser = analyserRef.current;
-    if (!analyser) return;
-    const buf = new Float32Array(analyser.fftSize);
-    const tick = () => {
-      analyser.getFloatTimeDomainData(buf);
-      let sum = 0;
-      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-      const rms = Math.sqrt(sum / buf.length);
-      // Light non-linear shaping so quiet speech still moves the meter.
-      setLevel(Math.min(1, rms * 3.2));
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-  }, []);
-
   // ── teardown of the recording graph (stream, ctx, raf) ──
   const teardownRecording = useCallback(() => {
     stopMeter();
@@ -112,6 +125,151 @@ export function useVoice(): UseVoice {
     analyserRef.current = null;
     recorderRef.current = null;
   }, [stopMeter]);
+
+  // ── TTS playback queue (Web Speech API — no server round-trip needed) ──
+  const drainQueue = useCallback(async () => {
+    if (playing.current) return;
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    playing.current = true;
+    setVoiceSpeaking(true);
+
+    try {
+      for (;;) {
+        const next = playQueue.current.shift();
+        if (next === undefined) break;
+
+        await new Promise<void>((resolve) => {
+          const utt = new SpeechSynthesisUtterance(next);
+          utt.onend = () => resolve();
+          utt.onerror = () => resolve();
+          window.speechSynthesis.speak(utt);
+        });
+      }
+    } finally {
+      playing.current = false;
+      setVoiceSpeaking(false);
+    }
+  }, [setVoiceSpeaking]);
+
+  const speak = useCallback(
+    async (text: string) => {
+      if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+      const trimmed = text.trim();
+      if (trimmed.length === 0) return;
+      playQueue.current.push(trimmed);
+      await drainQueue();
+    },
+    [drainQueue],
+  );
+
+  const stopSpeaking = useCallback(() => {
+    playQueue.current = [];
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    playing.current = false;
+    setVoiceSpeaking(false);
+  }, [setVoiceSpeaking]);
+
+  const runMeter = useCallback(() => {
+    const analyser = analyserRef.current;
+    if (!analyser) return;
+    const buf = new Float32Array(analyser.fftSize);
+    prevTickTimeRef.current = performance.now();
+
+    const tick = () => {
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      const rms = Math.sqrt(sum / buf.length);
+      setLevel(Math.min(1, rms * 3.2));
+
+      const now = performance.now();
+      const delta = Math.min(now - prevTickTimeRef.current, MAX_TICK_DELTA_MS);
+      prevTickTimeRef.current = now;
+
+      const state = vadStateRef.current;
+
+      const setVad = (next: VadState) => {
+        if (vadStateRef.current !== next) {
+          vadStateRef.current = next;
+          setVoiceVadState(next);
+        }
+      };
+
+      if (state === "listening") {
+        if (rms > SPEECH_THRESHOLD_RMS) {
+          speechConfirmAccRef.current = 0;
+          setVad("speech_detected");
+        } else if (now - recordingStartRef.current > PRE_SPEECH_TIMEOUT_MS) {
+          // No speech detected in time — discard silently
+          setVad("idle");
+          // tear down without submitting
+          stopMeter();
+          if (streamRef.current) {
+            for (const t of streamRef.current.getTracks()) t.stop();
+            streamRef.current = null;
+          }
+          if (audioCtxRef.current) {
+            void audioCtxRef.current.close().catch(() => {});
+            audioCtxRef.current = null;
+          }
+          analyserRef.current = null;
+          if (recorderRef.current && recorderRef.current.state !== "inactive") {
+            // Prevent onstop from triggering transcription
+            recorderRef.current.ondataavailable = null;
+            recorderRef.current.onstop = () => {
+              chunksRef.current = [];
+              recorderRef.current = null;
+              setVoiceRecording(false);
+            };
+            recorderRef.current.stop();
+          }
+          return;
+        }
+      } else if (state === "speech_detected") {
+        if (rms > SPEECH_THRESHOLD_RMS) {
+          speechConfirmAccRef.current += delta;
+          if (speechConfirmAccRef.current >= SPEECH_CONFIRM_MS) {
+            totalSpeechMsRef.current = 0;
+            setVad("in_speech");
+          }
+        } else if (rms < NOISE_FLOOR_RMS) {
+          setVad("listening");
+        }
+      } else if (state === "in_speech") {
+        if (rms > NOISE_FLOOR_RMS) {
+          totalSpeechMsRef.current += delta;
+        } else {
+          silenceStartRef.current = now;
+          setVad("post_speech_silence");
+        }
+      } else if (state === "post_speech_silence") {
+        if (rms > NOISE_FLOOR_RMS) {
+          silenceStartRef.current = null;
+          setVad("in_speech");
+        } else {
+          const silenceDuration = now - (silenceStartRef.current ?? now);
+          const threshold =
+            totalSpeechMsRef.current < SHORT_UTT_THRESHOLD_MS
+              ? LONG_SILENCE_MS
+              : SHORT_SILENCE_MS;
+          if (silenceDuration >= threshold) {
+            setVad("committing");
+            // Stop the recorder — onstop will handle transcription
+            const recorder = recorderRef.current;
+            if (recorder && recorder.state !== "inactive") {
+              recorder.stop();
+            }
+          }
+        }
+      }
+
+      rafRef.current = requestAnimationFrame(tick);
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+  }, [stopMeter, setVoiceVadState, setVoiceRecording]);
 
   const startRecording = useCallback(async () => {
     if (!available) return;
@@ -161,7 +319,11 @@ export function useVoice(): UseVoice {
         teardownRecording();
         setVoiceRecording(false);
 
-        if (blob.size === 0) return;
+        if (blob.size === 0) {
+          vadStateRef.current = "idle";
+          setVoiceVadState("idle");
+          return;
+        }
 
         setVoiceTranscribing(true);
         void transcribe(blob)
@@ -173,14 +335,23 @@ export function useVoice(): UseVoice {
             }
           })
           .catch(() => {})
-          .finally(() => setVoiceTranscribing(false));
+          .finally(() => {
+            setVoiceTranscribing(false);
+            vadStateRef.current = "idle";
+            setVoiceVadState("idle");
+          });
       };
 
+      recordingStartRef.current = performance.now();
       recorder.start();
+      vadStateRef.current = "listening";
+      setVoiceVadState("listening");
       setVoiceRecording(true);
     } catch {
       teardownRecording();
       setVoiceRecording(false);
+      vadStateRef.current = "idle";
+      setVoiceVadState("idle");
     }
   }, [
     available,
@@ -188,86 +359,50 @@ export function useVoice(): UseVoice {
     teardownRecording,
     setVoiceRecording,
     setVoiceTranscribing,
+    setVoiceVadState,
     addOperatorMessage,
     requestAgentRun,
   ]);
 
-  const stopRecording = useCallback(() => {
+  const cancelRecording = useCallback(() => {
     const recorder = recorderRef.current;
-    if (!recorder) return;
-    if (recorder.state !== "inactive") {
-      recorder.stop(); // triggers onstop → transcription pipeline
-    } else {
-      teardownRecording();
-      setVoiceRecording(false);
+    if (recorder && recorder.state !== "inactive") {
+      recorder.ondataavailable = null;
+      recorder.onstop = () => {
+        chunksRef.current = [];
+        recorderRef.current = null;
+        setVoiceRecording(false);
+      };
+      recorder.stop();
     }
-  }, [teardownRecording, setVoiceRecording]);
+    teardownRecording();
+    setVoiceRecording(false);
+    vadStateRef.current = "idle";
+    setVoiceVadState("idle");
+  }, [teardownRecording, setVoiceRecording, setVoiceVadState]);
 
-  // ── TTS playback queue ──
-  // A single in-flight drain loop processes the queue sequentially; `speak`
-  // just enqueues and kicks it off when idle (no self-referential callback).
-  const drainQueue = useCallback(async () => {
-    if (playing.current) return;
-    playing.current = true;
-    setVoiceSpeaking(true);
-
-    try {
-      for (;;) {
-        const next = playQueue.current.shift();
-        if (next === undefined) break;
-
-        let url: string | null = null;
-        try {
-          const blob = await synthesize(next);
-          url = URL.createObjectURL(blob);
-          const el = playEl.current ?? new Audio();
-          playEl.current = el;
-          el.src = url;
-          await new Promise<void>((resolve) => {
-            const done = () => {
-              el.onended = null;
-              el.onerror = null;
-              resolve();
-            };
-            el.onended = done;
-            el.onerror = done;
-            void el.play().catch(done);
-          });
-        } catch {
-          // swallow — keep the queue moving
-        } finally {
-          if (url) URL.revokeObjectURL(url);
-        }
-      }
-    } finally {
-      playing.current = false;
-      setVoiceSpeaking(false);
+  const toggleRecording = useCallback(async () => {
+    if (vadStateRef.current !== "idle") {
+      // Manual cancel — discard blob
+      cancelRecording();
+      return;
     }
-  }, [setVoiceSpeaking]);
-
-  const speak = useCallback(
-    async (text: string) => {
-      if (!available) return;
-      const trimmed = text.trim();
-      if (trimmed.length === 0) return;
-      playQueue.current.push(trimmed);
-      await drainQueue();
-    },
-    [available, drainQueue],
-  );
+    if (!available) return;
+    // Stop any TTS before recording
+    stopSpeaking();
+    await startRecording();
+  }, [available, cancelRecording, startRecording, stopSpeaking]);
 
   // ── unmount cleanup ──
   useEffect(() => {
     return () => {
-      teardownRecording();
+      cancelRecording();
       playQueue.current = [];
-      const el = playEl.current;
-      if (el) {
-        el.pause();
-        el.src = "";
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
       }
     };
-  }, [teardownRecording]);
+  }, [cancelRecording]);
 
   return {
     available,
@@ -275,9 +410,11 @@ export function useVoice(): UseVoice {
     transcribing,
     speaking,
     level,
-    startRecording,
-    stopRecording,
+    vadState: voiceVadState,
+    toggleRecording,
+    cancelRecording,
     speak,
+    stopSpeaking,
   };
 }
 
@@ -291,8 +428,14 @@ export function useAutoSpeakLatest(speak: UseVoice["speak"], enabled: boolean): 
   const messages = useNemoStore((s) => s.messages);
   const streaming = useNemoStore((s) => s.streaming);
   const spokenId = useRef<string | null>(null);
+  // Tracks the enabled value from the previous effect run so we can detect
+  // the false→true transition and suppress history replay only on that frame.
+  const wasEnabledRef = useRef(false);
 
   useEffect(() => {
+    const wasEnabled = wasEnabledRef.current;
+    wasEnabledRef.current = enabled;
+
     if (!enabled || !available) return;
     if (streaming) return;
 
@@ -307,9 +450,11 @@ export function useAutoSpeakLatest(speak: UseVoice["speak"], enabled: boolean): 
     }
     if (!latest) return;
 
-    // On first activation, mark the current latest as already spoken so we
-    // don't replay history when the toggle is switched on.
-    if (spokenId.current === null) {
+    // On the frame where enabled just became true, mark the current latest as
+    // already seen so we don't replay prior conversation history. Any message
+    // that arrives after this point (including messages already streaming when
+    // the toggle fired) will be spoken normally.
+    if (!wasEnabled) {
       spokenId.current = latest.id;
       return;
     }
