@@ -4,8 +4,8 @@
  * DeckScene — the live 3D coverage twin, ported from the standalone deck.gl
  * viewer (`viewer/app.js`, "trips" theme by Mehul Chourasia) into the HUD.
  *
- * Animated ray traces (TripsLayer) coloured by signal strength (orange = strong,
- * teal = weak) over height-shaded extruded OSM buildings, EE masts + cuOpt-proposed
+ * Animated ray traces (TripsLayer) coloured by antenna load share (green = light,
+ * red = stressed) over height-shaded extruded OSM buildings, EE masts + cuOpt-proposed
  * masts, coverage holes and London place labels, on a tokenless CARTO Dark Matter
  * basemap (MapLibre + MapboxOverlay).
  *
@@ -73,8 +73,9 @@ const BUILDING_SHORT: RGB = [36, 42, 52];
 const BUILDING_TALL: RGB = [150, 166, 192];
 const BUILDING_HEIGHT_REF = 95; // metres at which the gradient saturates
 const GROUND_COLOR = "#0c1119"; // subtle dark blue-grey ground tint
-const TRAIL_STRONG: RGB = [253, 128, 93]; // orange → strong signal
-const TRAIL_WEAK: RGB = [23, 184, 190]; // teal   → weak signal
+const LOAD_GREEN: RGB = [43, 214, 118]; // low load
+const LOAD_YELLOW: RGB = [255, 196, 72]; // mid load
+const LOAD_RED: RGB = [255, 78, 68]; // high load
 const HOLE_COLOR: RGB = [255, 70, 70];
 const MATERIAL = {
   ambient: 0.1,
@@ -140,6 +141,7 @@ interface ServiceCampus {
 }
 const SERVICE_CAMPUS: ServiceCampus[] = [
   { lat: 51.50333, lng: -0.08694, radiusM: 48, note: "Guy's Hospital (tower + podium core)" },
+  { lat: 51.518, lng: -0.0588, radiusM: 45, note: "Royal London Hospital (modern tower complex)" },
 ];
 // How close a service must be to a SERVICE_CAMPUS centre to be treated as that campus.
 const SERVICE_CAMPUS_MATCH_M = 30;
@@ -150,12 +152,6 @@ const ANIMATION_SPEED = 1.2;
 const TRAIL_LENGTH = 180;
 const RAY_DURATION = 130;
 const MAX_TRIPS = 700000; // cap rays for a clean, smooth field (above the 25-tile ring=13 ~550-600k output so every ray renders, step stays 1)
-
-// ---- Signal-strength model (pseudo-RSS from path length + bounces) --------
-const REF_DBM = 58; // reference mast EIRP
-const RSS_MIN = -115,
-  RSS_MAX = -45;
-const BOUNCE_LOSS = 6; // dB lost per reflection/diffraction
 
 // Key London places within the simulated square (Bankside/Bermondsey in the west out to
 // Canary Wharf/Greenwich), as orientation pointers. Each carries a `tier` — 0 = major
@@ -305,10 +301,34 @@ async function fetchJSON(url: string): Promise<unknown> {
   return r.json();
 }
 
+const coordKey = (coord: number[]) => `${coord[0].toFixed(6)},${coord[1].toFixed(6)}`;
+
+const loadHeatColor = (t: number): RGB => {
+  const clamped = clamp01(t);
+  if (clamped < 0.35) return mix(LOAD_GREEN, LOAD_YELLOW, clamped / 0.35);
+  return mix(LOAD_YELLOW, LOAD_RED, (clamped - 0.35) / 0.65);
+};
+
 // Each ray becomes a deck.gl "trip": a path, per-vertex timestamps (a pulse that
-// travels from the mast outward, staggered by a random phase), and a strength colour.
+// travels from the mast outward, staggered by a random phase), and a load-share colour.
 function toTrips(fc: FC<RayFeature>): Trip[] {
   const feats = fc.features;
+  const loadCounts = new Map<string, number>();
+  for (const feature of feats) {
+    const origin = feature.geometry.coordinates[0];
+    if (!origin) continue;
+    const key = coordKey(origin);
+    loadCounts.set(key, (loadCounts.get(key) ?? 0) + 1);
+  }
+  // Rank masts by their ray count and colour each by its *percentile position*, not its
+  // raw share. The per-mast counts are heavily skewed (a handful of hubs carry far more
+  // rays than the long tail, plus one big outlier), so a raw share or normalise-by-max
+  // ramp collapses almost every mast into the green band. Ranking spreads the green→red
+  // heat evenly across masts so relative stress (busiest = red) actually reads.
+  const ranked = [...loadCounts.entries()].sort((a, b) => a[1] - b[1]);
+  const denom = Math.max(1, ranked.length - 1);
+  const loadRank = new Map<string, number>();
+  ranked.forEach(([key], i) => loadRank.set(key, i / denom));
   const step = Math.max(1, Math.ceil(feats.length / MAX_TRIPS));
   const trips: Trip[] = [];
   for (let k = 0; k < feats.length; k += step) {
@@ -323,11 +343,7 @@ function toTrips(fc: FC<RayFeature>): Trip[] {
     if (total <= 0) continue;
     const phase = Math.random() * LOOP_LENGTH;
     const timestamps = cum.map((c) => phase + (c / total) * RAY_DURATION);
-    const bounces = feats[k].properties.bounces ?? coords.length - 2;
-    const rss =
-      REF_DBM - (20 * Math.log10(Math.max(total, 1)) + 37.55) - bounces * BOUNCE_LOSS;
-    const t = clamp01((rss - RSS_MIN) / (RSS_MAX - RSS_MIN));
-    const color = mix(TRAIL_WEAK, TRAIL_STRONG, t);
+    const color = loadHeatColor(loadRank.get(coordKey(coords[0])) ?? 0);
     const path = coords as unknown as Position[];
     trips.push({ path, timestamps, color });
     // Seamless loop: a ray whose pulse straddles the loop boundary is duplicated one
@@ -895,7 +911,8 @@ function buildLabelLayers(
   ];
 }
 
-// The single animated layer — the signal-ray trips, advanced each frame by `time`.
+// The single animated layer — the signal-ray trips, advanced each frame by `time`,
+// coloured by per-mast load rank (see toTrips).
 function buildRaysLayer(trips: Trip[], time: number, st: LayerState): TripsLayer<Trip> {
   return new TripsLayer<Trip>({
     id: "rays",

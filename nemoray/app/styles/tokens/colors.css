@@ -75,6 +75,35 @@
     var(--signal-excellent) 100%
   );
 
+  /* ---- Map legend · deck.gl surface vocabulary --------- */
+  /* MIRROR of the raw RGB constants in components/map/DeckScene.tsx — kept here
+     so the on-map MapLegend reads tokens (chrome lint forbids raw hex) while
+     never drifting from what the surface actually paints. If you change a colour
+     in DeckScene.tsx, update its twin here (and vice-versa). */
+  --map-load-light: #2bd676;   /* LOAD_GREEN  — lightly loaded ray   */
+  --map-load-mid: #ffc448;     /* LOAD_YELLOW — mid load             */
+  --map-load-stressed: #ff4e44;/* LOAD_RED    — stressed ray         */
+  --map-load-gradient: linear-gradient(
+    90deg,
+    var(--map-load-light) 0%,
+    var(--map-load-mid) 35%,
+    var(--map-load-stressed) 100%
+  );
+  --map-mast-ee: #2882ff;      /* MAST_DOT_EE  — existing EE beacon  */
+  --map-mast-proposed: #ffc83c;/* MAST_DOT_NEW — cuOpt-proposed beacon */
+  --map-service-police: #2b6fff;   /* SERVICE_COLOR.police          */
+  --map-service-fire: #ff3b30;     /* SERVICE_COLOR.fire            */
+  --map-service-hospital: #ff4d9d; /* SERVICE_COLOR.hospital        */
+  --map-deadzone: #ff4646;     /* HOLE_COLOR — coverage hole         */
+  --map-building-short: #242a34;/* BUILDING_SHORT — low footprint    */
+  --map-building-tall: #96a6c0; /* BUILDING_TALL  — tall footprint   */
+  --map-building-gradient: linear-gradient(
+    90deg,
+    var(--map-building-short) 0%,
+    var(--map-building-tall) 100%
+  );
+  --map-hub: #21d4fd;          /* tier-0 place-label anchor dot      */
+
   /* ============================================================
      Semantic aliases — reference these in components
      ============================================================ */

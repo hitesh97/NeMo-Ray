@@ -7,6 +7,7 @@ import { RightRail } from "@/components/panels/RightRail";
 import { BottomBar } from "@/components/panels/BottomBar";
 import { TooltipProvider } from "@/components/primitives";
 import { MapMount } from "@/components/map/MapMount";
+import { MapLegend } from "@/components/layers/MapLegend";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useNemoStore } from "@/store";
 import { CollapsiblePanel } from "./CollapsiblePanel";
@@ -50,6 +51,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="pointer-events-none absolute inset-0 z-10 flex p-3">
               {children}
             </div>
+            {/* on-map key for the deck.gl vocabulary (rays / masts / services / …) */}
+            <MapLegend />
           </main>
 
           <CollapsiblePanel
