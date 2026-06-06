@@ -205,6 +205,53 @@ export interface MapViewState {
   bearing: number;
 }
 
+// ── pipeline telemetry (public/raytracing/summary.json) ─────────────────────
+/**
+ * The real run summary the Python pipeline writes to
+ * `nemoray/public/raytracing/summary.json` on every solve (see `src/export.py`
+ * `export_all`). Mirrors that file's shape — coverage figures plus a GPU/RT
+ * `performance` block. All `performance` fields are optional so the HUD degrades
+ * gracefully on an older artifact that lacks them.
+ */
+export interface CoverageTelemetry {
+  /** EE masts inside the simulated bbox. */
+  sites_total: number;
+  /** OSM building footprints modelled. */
+  buildings: number;
+  /** Radio-map cells solved across all tiles. */
+  simulated_cells: number;
+  /** % of cells above the served threshold. */
+  served_pct: number;
+  /** Low-coverage polygons (coverage holes / dead zones). */
+  low_coverage_polys: number;
+  /** Total ray-path polylines exported. */
+  ray_paths: number;
+  /** Masts that emitted at least one exported ray. */
+  masts_emitting_rays: number;
+  /** Geographic extent actually rendered (WGS84). */
+  coverage_bounds: { west: number; south: number; east: number; north: number };
+  performance?: {
+    device?: string;
+    backend?: string;
+    peak_gpu_util_pct?: number;
+    mean_gpu_util_pct?: number;
+    /** Peak per-process GPU memory during the RT solve, MiB. */
+    peak_gpu_mem_mib?: number;
+    samples?: number;
+    coverage_solve?: {
+      tiles_solved?: number;
+      transmitters?: number;
+      mean_ms?: number;
+      p50_ms?: number;
+      max_ms?: number;
+    };
+    radio_map_cells?: number;
+    ray_trace?: { count?: number; total_s?: number; rays_per_s?: number };
+    mosaic_s?: number;
+    wall_time_s?: number;
+  };
+}
+
 /**
  * The ONE contract every map implementation satisfies. `MapPlaceholder` and
  * `CesiumScene` both accept exactly this — swapping is a single env flag
@@ -248,4 +295,4 @@ export type Workspace =
 /** Which panel the left rail is showing (context side). */
 export type LeftRailTab = "network" | "scenarios";
 /** Which panel the right rail is showing (action side). */
-export type RightRailTab = "chat" | "cuopt";
+export type RightRailTab = "chat" | "cuopt" | "stats";

@@ -11,6 +11,7 @@ import type {
   CameraCommand,
   CameraCommandType,
   CoverageStatus,
+  CoverageTelemetry,
   DeadZone,
   EventMarker,
   LayerId,
@@ -49,6 +50,9 @@ interface NemoState {
   deadZones: DeadZone[];
   coverageStatus: CoverageStatus;
   proposals: Proposal[];
+  /** Real pipeline run summary (public/raytracing/summary.json); null until loaded. */
+  telemetry: CoverageTelemetry | null;
+  setTelemetry(t: CoverageTelemetry | null): void;
   selectSite(id: SiteId | null): void;
   hoverSite(id: SiteId | null): void;
   deactivateSite(id: SiteId): void;
@@ -150,6 +154,8 @@ export const useNemoStore = create<NemoState>((set, get) => ({
   deadZones: [],
   coverageStatus: "idle",
   proposals: [],
+  telemetry: null,
+  setTelemetry: (t) => set({ telemetry: t }),
 
   selectSite: (id) => set({ selectedSiteId: id }),
   hoverSite: (id) => set({ hoveredSiteId: id }),
@@ -358,6 +364,7 @@ export const useNemoStore = create<NemoState>((set, get) => ({
 
 // ── convenience selector hooks ──
 export const useSites = () => useNemoStore((s) => s.sites);
+export const useTelemetry = () => useNemoStore((s) => s.telemetry);
 export const useSelectedSite = () =>
   useNemoStore((s) => (s.selectedSiteId ? s.sitesById[s.selectedSiteId] : null));
 export const usePanels = () => useNemoStore((s) => s.panels);

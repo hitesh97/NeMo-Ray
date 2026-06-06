@@ -1,9 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
-
-import { useNemoStore } from "@/store";
+import { useNemoStore, useTelemetry } from "@/store";
 import { Panel, PanelHeader, PanelBody, StatusDot, type Status } from "@/components/primitives";
+import { formatCompact } from "@/components/primitives";
 import { cn } from "@/lib/cn";
 
 const COVERAGE_STATUS = {
@@ -14,34 +13,37 @@ const COVERAGE_STATUS = {
 } as const;
 
 /**
- * Left-rail network status. Reports the real fleet — how many ESN cell towers
- * are monitored across London and how many are currently on air. No synthetic
- * subscriber or congestion figures.
+ * Left-rail network status. Reports the real fleet straight from the pipeline run
+ * summary (`public/raytracing/summary.json`): how many EE masts the London twin holds,
+ * how many actually emitted rays in the rendered tiles, the served-coverage percentage
+ * and the count of coverage holes. No synthetic subscriber or congestion figures.
  */
 export function NetworkStatusPanel({ className }: { className?: string }) {
   const coverageStatus = useNemoStore((s) => s.coverageStatus);
-  const sites = useNemoStore((s) => s.sites);
-  const deadZones = useNemoStore((s) => s.deadZones);
-  const s = COVERAGE_STATUS[coverageStatus];
+  const t = useTelemetry();
 
-  const { total, online, offline, esn, ee } = useMemo(() => {
-    const on = sites.filter((x) => x.status === "active").length;
-    return {
-      total: sites.length,
-      online: on,
-      offline: sites.length - on,
-      esn: sites.filter((x) => x.operator === "ESN").length,
-      ee: sites.filter((x) => x.operator === "EE").length,
-    };
-  }, [sites]);
+  // LIVE once the real run summary has loaded; SYNC/FAULT follow an active recompute.
+  const statusKey =
+    coverageStatus === "computing"
+      ? "computing"
+      : coverageStatus === "error"
+        ? "error"
+        : t
+          ? "ready"
+          : "idle";
+  const s = COVERAGE_STATUS[statusKey];
 
-  const criticalGaps = deadZones.filter((d) => d.severity === "critical").length;
+  const total = t?.sites_total ?? null;
+  const emitting = t?.masts_emitting_rays ?? null;
+  const gaps = t?.low_coverage_polys ?? null;
+  const served = t?.served_pct ?? null;
+  const buildings = t?.buildings ?? null;
 
   return (
     <Panel className={cn("@container", className)}>
       <PanelHeader
         label="Network Status"
-        sub="LONDON · ESN"
+        sub="LONDON · EE TWIN"
         right={
           <span className="flex items-center gap-1.5">
             <StatusDot status={s.dot} pulse={s.pulse} />
@@ -50,45 +52,42 @@ export function NetworkStatusPanel({ className }: { className?: string }) {
         }
       />
       <PanelBody className="flex flex-col gap-3 overflow-y-auto p-3">
-        {/* Headline — total cell towers monitored */}
+        {/* Headline — total EE masts in the digital twin */}
         <div className="flex flex-col gap-1">
-          <span className="nm-eyebrow text-ink-faint">Cell Towers</span>
+          <span className="nm-eyebrow text-ink-faint">Cell Masts</span>
           <div className="flex items-baseline gap-2">
             <span className="nm-readout text-4xl leading-none tracking-tight text-ink tabular-nums">
-              {total}
+              {total === null ? "—" : total.toLocaleString()}
             </span>
             <span className="text-[11px] leading-tight text-ink-faint">
-              sites monitored
+              EE masts in twin
             </span>
           </div>
         </div>
 
-        {/* On-air / offline split */}
+        {/* Emitting in the rendered tiles / coverage holes */}
         <div className="grid grid-cols-2 gap-2">
-          <StatTile label="On air" value={online} status="nominal" />
+          <StatTile label="Emitting" value={emitting} status="nominal" />
           <StatTile
-            label="Offline"
-            value={offline}
-            status={offline > 0 ? "critical" : "idle"}
+            label="Coverage gaps"
+            value={gaps}
+            status={gaps && gaps > 0 ? "critical" : "idle"}
           />
         </div>
 
-        {/* Operator breakdown — real per-network counts */}
+        {/* Served coverage — the headline coverage KPI from the solve */}
         <div className="flex items-center justify-between border-t border-hairline pt-2.5">
-          <OperatorChip label="ESN" count={esn} />
-          <OperatorChip label="EE" count={ee} />
+          <span className="nm-eyebrow text-ink-faint">Coverage served</span>
+          <span className="nm-readout text-sm tabular-nums text-nominal">
+            {served === null ? "—" : `${served.toFixed(1)}%`}
+          </span>
         </div>
 
-        {/* Critical coverage gaps — dead zones derived from the active site set */}
+        {/* Buildings modelled — the OSM twin the rays bounce through */}
         <div className="flex items-center justify-between border-t border-hairline pt-2.5">
-          <span className="nm-eyebrow text-ink-faint">Critical coverage gaps</span>
-          <span
-            className={cn(
-              "nm-readout text-sm tabular-nums",
-              criticalGaps > 0 ? "text-critical" : "text-ink-dim",
-            )}
-          >
-            {criticalGaps}
+          <span className="nm-eyebrow text-ink-faint">Buildings modelled</span>
+          <span className="nm-readout text-sm tabular-nums text-ink-dim">
+            {buildings === null ? "—" : formatCompact(buildings)}
           </span>
         </div>
       </PanelBody>
@@ -104,14 +103,14 @@ const TILE_ACCENT: Record<Status, string> = {
   idle: "border-l-hairline-strong text-ink-dim",
 };
 
-/** A single bordered count tile (on-air / offline). */
+/** A single bordered count tile. Shows an em-dash until telemetry loads. */
 function StatTile({
   label,
   value,
   status,
 }: {
   label: string;
-  value: number;
+  value: number | null;
   status: Status;
 }) {
   return (
@@ -123,18 +122,8 @@ function StatTile({
     >
       <span className="nm-eyebrow text-ink-faint">{label}</span>
       <span className="nm-readout text-2xl leading-none tracking-tight tabular-nums">
-        {value}
+        {value === null ? "—" : value.toLocaleString()}
       </span>
-    </div>
-  );
-}
-
-/** Compact operator readout — name beside count. */
-function OperatorChip({ label, count }: { label: string; count: number }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="nm-eyebrow text-ink-dim">{label}</span>
-      <span className="nm-readout text-sm text-ink tabular-nums">{count}</span>
     </div>
   );
 }
