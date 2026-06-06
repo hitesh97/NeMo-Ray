@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass, field
 
-from .geo import lnglat_to_en
+from .geo import lnglat_to_en, osgb36_to_wgs84
 
 
 @dataclass
@@ -45,10 +45,16 @@ def load_sites(cfg: dict) -> list[Site]:
             op = row["Operator"]
             if op not in wanted:
                 continue
-            lat = _to_float(row["Sitelat"])
-            lng = _to_float(row["Sitelng"])
-            if lat is None or lng is None:
+            raw_lat = _to_float(row["Sitelat"])
+            raw_lng = _to_float(row["Sitelng"])
+            if raw_lat is None or raw_lng is None:
                 continue
+            # Sitefinder Sitelat/Sitelng are OSGB36 geodetic, not WGS84 (the source
+            # converted the Sitengr grid refs off the Airy ellipsoid but omitted the
+            # datum shift). Correct to WGS84 here so the bbox filter, the physics
+            # easting/northing, and the exported masts.geojson are all ~125 m
+            # accurate instead of off-by-a-datum. See geo.osgb36_to_wgs84.
+            lng, lat = osgb36_to_wgs84(raw_lng, raw_lat)
             if not (bbox["lat_min"] <= lat <= bbox["lat_max"]
                     and bbox["lng_min"] <= lng <= bbox["lng_max"]):
                 continue

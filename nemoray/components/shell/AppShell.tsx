@@ -6,6 +6,7 @@ import { LeftRail } from "@/components/panels/LeftRail";
 import { RightRail } from "@/components/panels/RightRail";
 import { BottomBar } from "@/components/panels/BottomBar";
 import { TooltipProvider } from "@/components/primitives";
+import { DeckScene } from "@/components/map/DeckScene";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useNemoStore } from "@/store";
 import { CollapsiblePanel } from "./CollapsiblePanel";
@@ -42,7 +43,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           </CollapsiblePanel>
 
           <main className="relative min-w-0 flex-1 overflow-hidden bg-bg nm-grid-bg">
-            {/* per-workspace content (the map surface was removed) */}
+            {/* live deck.gl coverage twin (centre stage) */}
+            <DeckScene />
+            {/* per-workspace content overlaid on the map */}
             <div className="pointer-events-none absolute inset-0 z-10 flex p-3">
               {children}
             </div>

@@ -14,6 +14,9 @@ from pyproj import Transformer
 # always_xy=True => inputs/outputs are ordered (lng, lat) / (easting, northing).
 _FWD = Transformer.from_crs("EPSG:4326", "EPSG:27700", always_xy=True)
 _INV = Transformer.from_crs("EPSG:27700", "EPSG:4326", always_xy=True)
+# OSGB36 geodetic (Airy 1830, EPSG:4277) -> WGS84. Used to repair source data that
+# is published in degrees but on the OSGB36 datum (see osgb36_to_wgs84).
+_OSGB36_TO_WGS84 = Transformer.from_crs("EPSG:4277", "EPSG:4326", always_xy=True)
 
 
 def lnglat_to_en(lng, lat):
@@ -24,6 +27,21 @@ def lnglat_to_en(lng, lat):
 def en_to_lnglat(e, n):
     """British National Grid metres -> WGS84. Returns (lng, lat)."""
     return _INV.transform(e, n)
+
+
+def osgb36_to_wgs84(lng, lat):
+    """OSGB36 geodetic degrees -> WGS84 degrees. Returns (lng, lat).
+
+    "Decimal degrees" does not imply WGS84: the OSGB36 datum is built on the Airy
+    1830 ellipsoid and sits ~125 m from WGS84 across London. A common upstream bug
+    is to convert OS National Grid refs to lat/lng off the Airy ellipsoid but skip
+    the OSGB36->WGS84 datum shift — the Sitefinder CSV is exactly that (its
+    Sitelat/Sitelng round-trip to the Sitengr grid ref to ~0 m but are ~125 m off
+    true WGS84). Apply this before treating such coordinates as WGS84, or the masts
+    land ~125 m from their true position (e.g. riverside masts in the Thames) and
+    the RT solve traces from the wrong spot.
+    """
+    return _OSGB36_TO_WGS84.transform(lng, lat)
 
 
 @dataclass

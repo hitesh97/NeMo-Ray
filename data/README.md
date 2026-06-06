@@ -21,7 +21,9 @@ Datasets for NeMo-Ray, organised by processing stage.
 
 "Decimal degrees" does **not** guarantee WGS84. Each dataset's CRS was verified,
 and its correction lives in `nemoray/lib/geo/datasetCoordinates.ts` (loaders apply
-it at parse time so the map only ever sees WGS84):
+it at parse time so the map only ever sees WGS84). The Python pipeline corrects the
+same Sitefinder CSV independently in `src/masts.py` via `geo.osgb36_to_wgs84`, so
+the RT solve traces from masts' true positions:
 
 | Dataset | Stored CRS | Correction |
 |---|---|---|
