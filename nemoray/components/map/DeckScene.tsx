@@ -9,11 +9,11 @@
  * masts, coverage holes and London place labels, on a tokenless CARTO Dark Matter
  * basemap (MapLibre + MapboxOverlay).
  *
- * Masts are drawn as the project's own glTF antenna/tower models (`/models/*`,
- * `ScenegraphLayer`) scaled to each site's height with a beacon dot on top, and the
- * emergency-services feed (police / fire / hospital) is drawn as colour-coded 3D
- * columns capped with the map-pin icons from `/icons/*.svg` and a base dot — the same
- * visual language the retired Cesium scene used, rebuilt on deck.gl.
+ * Masts are drawn as procedural white/red comms-mast columns scaled to each site's
+ * height with a beacon dot on top (blue = existing EE, gold = cuOpt-proposed). The
+ * emergency-services feed (police / fire / hospital) is point-matched to the OSM
+ * footprint each station sits in, that whole footprint is painted in the service colour,
+ * and a map-pin from `/icons/*.svg` floats above it with the name revealed on zoom-in.
  *
  * It is a self-contained map *surface*: it reads the pipeline artifacts from
  * `/raytracing/*` (+ the `/api/emergency-services` feed) and reads NO store
@@ -32,17 +32,20 @@ import {
   DirectionalLight,
   LightingEffect,
 } from "@deck.gl/core";
-import { GeoJsonLayer, ScatterplotLayer, IconLayer, TextLayer } from "@deck.gl/layers";
+import {
+  GeoJsonLayer,
+  ColumnLayer,
+  ScatterplotLayer,
+  IconLayer,
+  TextLayer,
+} from "@deck.gl/layers";
 import { TripsLayer } from "@deck.gl/geo-layers";
-import { ScenegraphLayer } from "@deck.gl/mesh-layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import type { Color, Position, Layer, LayersList } from "@deck.gl/core";
 import type { Feature, GeoJSON, MultiPolygon, Polygon } from "geojson";
 
 // Where the pipeline artifacts are served from (nemoray/public/raytracing).
 const DATA = "/raytracing";
-// Where the restored glTF antenna/tower models live (nemoray/public/models).
-const MODELS = "/models";
 
 // Tokenless CARTO "Dark Matter" basemap (ground, roads, water) — same family the
 // deck.gl trips example uses.
@@ -57,8 +60,6 @@ const BUILDING_HEIGHT_REF = 95; // metres at which the gradient saturates
 const GROUND_COLOR = "#0c1119"; // subtle dark blue-grey ground tint
 const TRAIL_STRONG: RGB = [253, 128, 93]; // orange → strong signal
 const TRAIL_WEAK: RGB = [23, 184, 190]; // teal   → weak signal
-const MAST_COLOR: RGB = [33, 212, 253]; // cyan  → existing EE masts
-const NEW_MAST_COLOR: RGB = [255, 210, 63]; // gold → cuOpt-proposed masts
 const HOLE_COLOR: RGB = [255, 70, 70];
 const MATERIAL = {
   ambient: 0.1,
@@ -67,29 +68,18 @@ const MATERIAL = {
   specularColor: [60, 64, 70] as RGB,
 };
 
-// ---- Antenna / tower glTF models ------------------------------------------
-// Native world-space Y extents per model (yRange = full height in native units,
-// yMin = lowest vertex). These reproduce the scale/ground-offset maths from the
-// retired Cesium `SitefinderTowerLayer`: a model is scaled by `targetHeight / yRange`
-// and lifted by `-yMin * scale` so its base sits exactly on the ground. The big
-// 102 MB `cell_tower` model is intentionally not restored — tall sites fall back to
-// the slim `radio_tower` instead.
-type ModelKey = "radio" | "antennaA" | "antennaB" | "antennaC";
-interface ModelSpec {
-  uri: string;
-  yRange: number;
-  yMin: number;
-}
-const ANTENNA_MODELS: Record<ModelKey, ModelSpec> = {
-  radio: { uri: `${MODELS}/radio_tower/scene.gltf`, yRange: 12730, yMin: -5089 },
-  antennaA: { uri: `${MODELS}/antenna_a/scene.gltf`, yRange: 7.09, yMin: -3.545 },
-  antennaB: { uri: `${MODELS}/antenna_b/scene.gltf`, yRange: 4.744, yMin: -3.258 },
-  antennaC: { uri: `${MODELS}/antenna_c/scene.gltf`, yRange: 8.429, yMin: -3.545 },
-};
-const ROOFTOP_MODELS: ModelKey[] = ["antennaA", "antennaB", "antennaC"];
-// At/above this height a site reads as a free-standing tower (radio_tower); below it
-// reads as a rooftop antenna mast (the small antenna_* models).
-const TOWER_HEIGHT_M = 24;
+// ---- Antenna / mast styling -----------------------------------------------
+// Masts render as a bold procedural "comms mast": a white tower with a red top band
+// (the aviation red/white marking) and a coloured beacon dot on top — blue for existing
+// EE masts, gold for cuOpt-proposed ones. (glTF tower meshes were tried but deck.gl's
+// loader rendered them unreliably; flat columns are guaranteed visible and read cleanly.)
+const MAST_WHITE: RGB = [232, 236, 244];
+const MAST_RED: RGB = [226, 58, 53];
+const MAST_DOT_EE: RGB = [40, 130, 255]; // blue beacon → existing EE masts
+const MAST_DOT_NEW: RGB = [255, 200, 60]; // gold beacon → cuOpt-proposed masts
+const MAST_RADIUS_M = 3; // tower half-width
+// Minimum render height so a short rooftop mast still reads as a tower, not a speck.
+const MIN_TOWER_M = 14;
 
 // ---- Emergency-services markers -------------------------------------------
 type ServiceType = "police" | "fire" | "hospital";
@@ -187,11 +177,9 @@ interface Trip {
   timestamps: number[];
   color: RGB;
 }
-// A sited antenna: ground position, the chosen glTF model and the metres-tall it
-// should render at (`vh`).
+// A sited antenna: ground position and the metres-tall it should render at (`vh`).
 interface Mast {
   pos: Position;
-  model: ModelKey;
   vh: number;
 }
 // A matched service: a pin floating over the coloured footprint. `pos` is the
@@ -270,35 +258,22 @@ function toTrips(fc: FC<RayFeature>): Trip[] {
   return trips;
 }
 
-// Choose a glTF model + render-height for a site. Tall sites get the free-standing
-// radio tower; shorter ones get one of the rooftop antenna variants (picked
-// deterministically by index so the field looks varied but stable across frames).
-// Proposed masts are forced to the prominent tower.
-function pickModel(idx: number, h: number, forceTower: boolean): { model: ModelKey; vh: number } {
-  if (forceTower || h >= TOWER_HEIGHT_M)
-    return { model: "radio", vh: Math.max(h, forceTower ? 28 : TOWER_HEIGHT_M) };
-  return {
-    model: ROOFTOP_MODELS[idx % ROOFTOP_MODELS.length],
-    vh: Math.max(6, Math.min(h, 12)),
-  };
-}
-
 // Only masts within the simulated area of interest (drop the rest of Greater London),
-// each resolved to a glTF model + render-height.
+// each rendered as the radio tower sized to its height. Proposed (cuOpt) masts are made
+// a touch taller so they stand out from the existing field.
 function toMasts(
   fc: FC<MastFeature> | null,
   bounds: Bounds | null,
-  forceTower: boolean,
+  proposed: boolean,
 ): Mast[] {
   if (!fc) return [];
   const out: Mast[] = [];
-  let idx = 0;
   for (const f of fc.features) {
     const [lng, lat] = f.geometry.coordinates;
     if (!inBounds(lng, lat, bounds)) continue;
     const h = Math.max(f.properties.height_m || 15, 10);
-    const { model, vh } = pickModel(idx++, h, forceTower);
-    out.push({ pos: [lng, lat], model, vh });
+    const vh = proposed ? Math.max(h + 4, 28) : Math.max(h, MIN_TOWER_M);
+    out.push({ pos: [lng, lat], vh });
   }
   return out;
 }
@@ -319,7 +294,8 @@ function pointInRing(x: number, y: number, ring: number[][]): boolean {
   return inside;
 }
 
-// One indexed building footprint: outer ring, bbox (fast reject) and centroid.
+// One indexed building footprint: outer ring, bbox (fast reject), centroid and a
+// rough planar area (used to anchor the pin over the dominant mass of a complex).
 interface BuildingCell {
   feature: Feature<Polygon | MultiPolygon, BuildingProps>;
   ring: number[][];
@@ -329,6 +305,7 @@ interface BuildingCell {
   maxLat: number;
   cLng: number;
   cLat: number;
+  area: number;
 }
 function indexBuildings(buildings: GeoJSON): BuildingCell[] {
   const cells: BuildingCell[] = [];
@@ -343,14 +320,18 @@ function indexBuildings(buildings: GeoJSON): BuildingCell[] {
       maxLng = -Infinity,
       maxLat = -Infinity,
       sx = 0,
-      sy = 0;
-    for (const [x, y] of ring) {
+      sy = 0,
+      shoelace = 0;
+    for (let i = 0; i < ring.length; i++) {
+      const [x, y] = ring[i];
       if (x < minLng) minLng = x;
       if (y < minLat) minLat = y;
       if (x > maxLng) maxLng = x;
       if (y > maxLat) maxLat = y;
       sx += x;
       sy += y;
+      const [nx, ny] = ring[(i + 1) % ring.length];
+      shoelace += x * ny - nx * y;
     }
     cells.push({
       feature: feature as Feature<Polygon | MultiPolygon, BuildingProps>,
@@ -361,15 +342,18 @@ function indexBuildings(buildings: GeoJSON): BuildingCell[] {
       maxLat,
       cLng: sx / ring.length,
       cLat: sy / ring.length,
+      area: Math.abs(shoelace) / 2,
     });
   }
   return cells;
 }
 
-// Bind each in-bounds service to a building footprint: the one it sits inside, else
-// the nearest footprint whose centroid is within SERVICE_SNAP_M. Tags the matched
-// feature in place (so the buildings layer paints it) and returns a pin per match.
-// First match wins a footprint; unmatched services are dropped.
+// Bind each in-bounds service to its building. A campus/complex is modelled as several
+// stacked or tiled footprints (e.g. Guy's Hospital = a slim tower over a wide podium),
+// so we paint *every* footprint that contains the point — not just the first — and only
+// fall back to the nearest footprint (within SERVICE_SNAP_M) when none contains it. The
+// pin sits over the largest matched mass. A footprint already claimed by another service
+// is left alone; services with no footprint in range are dropped.
 function matchServiceBuildings(
   buildings: GeoJSON,
   payload: EmergencyPayload | null,
@@ -380,28 +364,38 @@ function matchServiceBuildings(
   const markers: Marker[] = [];
   for (const s of payload.services) {
     if (!inBounds(s.lng, s.lat, bounds)) continue;
-    let hit: BuildingCell | null = null;
+    const seeds: BuildingCell[] = [];
+    let nearest: BuildingCell | null = null;
     let best = SERVICE_SNAP_M;
     for (const c of cells) {
-      if (c.feature.properties.service) continue; // already claimed
-      if (s.lng >= c.minLng && s.lng <= c.maxLng && s.lat >= c.minLat && s.lat <= c.maxLat) {
-        if (pointInRing(s.lng, s.lat, c.ring)) {
-          hit = c;
-          break;
-        }
+      if (c.feature.properties.service) continue; // already claimed by another service
+      if (
+        s.lng >= c.minLng &&
+        s.lng <= c.maxLng &&
+        s.lat >= c.minLat &&
+        s.lat <= c.maxLat &&
+        pointInRing(s.lng, s.lat, c.ring)
+      ) {
+        seeds.push(c);
+        continue;
       }
       const d = metresBetween(s.lng, s.lat, c.cLng, c.cLat);
       if (d < best) {
         best = d;
-        hit = c;
+        nearest = c;
       }
     }
-    if (!hit) continue;
-    hit.feature.properties.service = s.type;
+    if (seeds.length === 0 && nearest) seeds.push(nearest);
+    if (seeds.length === 0) continue;
+    let anchor = seeds[0];
+    for (const c of seeds) {
+      c.feature.properties.service = s.type;
+      if (c.area > anchor.area) anchor = c;
+    }
     markers.push({
-      pos: [hit.cLng, hit.cLat],
+      pos: [anchor.cLng, anchor.cLat],
       type: s.type,
-      h: hit.feature.properties.height ?? 12,
+      h: anchor.feature.properties.height ?? 12,
       name: s.name,
     });
   }
@@ -423,63 +417,61 @@ function toHoles(fc: HoleFC | null): Hole[] {
   });
 }
 
-// One ScenegraphLayer per model variant present in `masts` (a layer renders a single
-// glTF, instanced across its data). Each instance is scaled to its site height and
-// lifted so the model's base sits on the ground.
-function antennaLayers(idPrefix: string, masts: Mast[]): Layer[] {
-  const byModel = new Map<ModelKey, Mast[]>();
-  for (const m of masts) {
-    const group = byModel.get(m.model);
-    if (group) group.push(m);
-    else byModel.set(m.model, [m]);
-  }
-  const layers: Layer[] = [];
-  for (const [key, group] of byModel) {
-    const spec = ANTENNA_MODELS[key];
-    layers.push(
-      new ScenegraphLayer<Mast>({
-        id: `${idPrefix}-${key}`,
-        data: group,
-        scenegraph: spec.uri,
-        _lighting: "pbr",
-        sizeScale: 1,
-        getPosition: (d) => d.pos,
-        getOrientation: [0, 0, 0],
-        getScale: (d) => {
-          const s = d.vh / spec.yRange;
-          return [s, s, s];
-        },
-        getTranslation: (d) => [0, 0, -spec.yMin * (d.vh / spec.yRange)],
-        pickable: false,
-      }),
-    );
-  }
-  return layers;
-}
-
-// A billboarded beacon dot floating at the top of each antenna — keeps sites locatable
-// from a top-down camera and over distance, the way the old scene's always-on dots did.
-function antennaDots(id: string, masts: Mast[], color: RGB): ScatterplotLayer<Mast> {
-  return new ScatterplotLayer<Mast>({
-    id,
-    data: masts,
-    billboard: true,
-    radiusUnits: "pixels",
-    getPosition: (d) => [d.pos[0], d.pos[1], d.vh + 4],
-    getRadius: 4.5,
-    radiusMinPixels: 3,
-    radiusMaxPixels: 7,
-    getFillColor: [...color, 235] as Color,
-    stroked: true,
-    lineWidthMinPixels: 1.2,
-    getLineColor: [8, 12, 18, 255],
-  });
+// A procedural comms mast per site: a white tower (lower 80%), a red top band (upper
+// 20%, sitting on top of the white via its z-base) and a billboarded beacon dot above
+// it. The dot stays visible as a pixel-sized point from any distance, so the antenna
+// field reads as a clear "where are the masts" map even when zoomed out.
+function antennaLayers(idPrefix: string, masts: Mast[], dot: RGB): Layer[] {
+  if (!masts.length) return [];
+  return [
+    new ColumnLayer<Mast>({
+      id: `${idPrefix}-body`,
+      data: masts,
+      diskResolution: 4,
+      radius: MAST_RADIUS_M,
+      angle: 45,
+      extruded: true,
+      getPosition: (d) => d.pos,
+      getElevation: (d) => d.vh * 0.8,
+      getFillColor: [...MAST_WHITE, 255] as Color,
+      material: MATERIAL,
+      pickable: false,
+    }),
+    new ColumnLayer<Mast>({
+      id: `${idPrefix}-cap`,
+      data: masts,
+      diskResolution: 4,
+      radius: MAST_RADIUS_M,
+      angle: 45,
+      extruded: true,
+      // Stack the red cap on top of the white body (column base = the position's z).
+      getPosition: (d) => [d.pos[0], d.pos[1], d.vh * 0.8],
+      getElevation: (d) => d.vh * 0.2,
+      getFillColor: [...MAST_RED, 255] as Color,
+      material: MATERIAL,
+      pickable: false,
+    }),
+    new ScatterplotLayer<Mast>({
+      id: `${idPrefix}-dot`,
+      data: masts,
+      billboard: true,
+      radiusUnits: "pixels",
+      getPosition: (d) => [d.pos[0], d.pos[1], d.vh + 5],
+      getRadius: 5,
+      radiusMinPixels: 3,
+      radiusMaxPixels: 8,
+      getFillColor: [...dot, 255] as Color,
+      stroked: true,
+      lineWidthMinPixels: 1.4,
+      getLineColor: [8, 12, 18, 255],
+    }),
+  ];
 }
 
 // The static (non-animated) layers — buildings, antennas, emergency services, holes
 // and labels. Built once and reused across animation frames so the glTF models aren't
 // reloaded and instance attributes aren't recomputed every tick.
-function buildStaticLayers(data: SceneData, onPick: (m: Marker | null) => void): LayersList {
+function buildStaticLayers(data: SceneData): LayersList {
   const L: LayersList = [];
 
   if (data.buildings)
@@ -520,8 +512,9 @@ function buildStaticLayers(data: SceneData, onPick: (m: Marker | null) => void):
       }),
     );
 
-  // Emergency services: a clickable map-pin floating just above each colour-wrapped
-  // footprint. Clicking a pin surfaces the station / hospital name (see the label layer).
+  // Emergency services: a map-pin floating just above each colour-wrapped footprint.
+  // The station / hospital name appears automatically when the camera is close (see
+  // the proximity label layer, rebuilt per-frame against the live zoom).
   if (data.markers.length)
     L.push(
       new IconLayer<Marker>({
@@ -534,20 +527,14 @@ function buildStaticLayers(data: SceneData, onPick: (m: Marker | null) => void):
         getSize: 34,
         sizeMinPixels: 20,
         sizeMaxPixels: 46,
-        pickable: true,
-        onClick: (info) => {
-          onPick((info.object as Marker) ?? null);
-          return true;
-        },
+        pickable: false,
       }),
     );
 
-  // Antennas: existing EE masts (cyan beacon) + cuOpt-proposed masts (gold beacon),
-  // each as the project's glTF tower/antenna models scaled to the site height.
-  L.push(...antennaLayers("masts", data.masts));
-  if (data.masts.length) L.push(antennaDots("mast-dots", data.masts, MAST_COLOR));
-  L.push(...antennaLayers("newmasts", data.newMasts));
-  if (data.newMasts.length) L.push(antennaDots("newmast-dots", data.newMasts, NEW_MAST_COLOR));
+  // Antennas: white/red comms masts sized to site height — existing EE masts get a blue
+  // beacon dot, cuOpt-proposed masts a gold one.
+  L.push(...antennaLayers("masts", data.masts, MAST_DOT_EE));
+  L.push(...antennaLayers("newmasts", data.newMasts, MAST_DOT_NEW));
 
   // Place labels last so they sit on top — orientation pointers in the UI theme.
   L.push(
@@ -590,15 +577,19 @@ function buildStaticLayers(data: SceneData, onPick: (m: Marker | null) => void):
   return L;
 }
 
-// A name label for the currently-selected service pin (empty when nothing is picked).
-// Rendered per-frame so it can follow click selection without rebuilding the scene.
-function buildSelectionLabel(selected: Marker | null): TextLayer<Marker> {
+// Service names reveal automatically once the camera is zoomed in past this level —
+// "in proximity" — and hide again on zoom-out so the wide view stays uncluttered.
+const SERVICE_LABEL_ZOOM = 14;
+
+// Name labels for every service pin, shown only when `visible` (the live zoom is past
+// SERVICE_LABEL_ZOOM). Rebuilt per-frame so it tracks zoom without rebuilding the scene.
+function buildServiceLabels(markers: Marker[], visible: boolean): TextLayer<Marker> {
   return new TextLayer<Marker>({
-    id: "service-label",
-    data: selected ? [selected] : [],
+    id: "service-labels",
+    data: visible ? markers : [],
     getPosition: (d) => [d.pos[0], d.pos[1], d.h + 6],
     getText: (d) => `${SERVICE_LABEL[d.type]} · ${d.name}`,
-    getSize: 13,
+    getSize: 12.5,
     sizeUnits: "pixels",
     getColor: [236, 240, 248, 255],
     billboard: true,
@@ -714,25 +705,20 @@ export function DeckScene() {
         holes: toHoles(holesFC),
       };
 
-      // Currently-selected service pin (click a pin to show its name, click empty to clear).
-      let selected: Marker | null = null;
-      // Build the static layers once; only the rays + selection label are rebuilt per frame.
-      const staticLayers = buildStaticLayers(data, (m) => {
-        selected = m;
-      });
-      // Clear the selection when the click misses every pickable layer.
-      overlay.setProps({
-        onClick: (info) => {
-          if (!info.picked) selected = null;
-        },
-      });
+      // Build the static layers once; only the rays + proximity labels are rebuilt per frame.
+      const staticLayers = buildStaticLayers(data);
 
       let time = 0;
       const animate = () => {
         if (cancelled || !overlay) return;
         time = (time + ANIMATION_SPEED) % LOOP_LENGTH;
+        const nearEnough = (map?.getZoom() ?? 0) >= SERVICE_LABEL_ZOOM;
         overlay.setProps({
-          layers: [...staticLayers, buildRaysLayer(data.trips, time), buildSelectionLabel(selected)],
+          layers: [
+            ...staticLayers,
+            buildRaysLayer(data.trips, time),
+            buildServiceLabels(data.markers, nearEnough),
+          ],
         });
         raf = requestAnimationFrame(animate);
       };
