@@ -2,12 +2,13 @@
 
 import type { LucideIcon } from "lucide-react";
 import {
-  Cable,
+  Building2,
   CircleSlash,
   RadioTower,
-  Spline,
+  Siren,
   Tag,
-  Zap,
+  TowerControl,
+  Waves,
 } from "lucide-react";
 import { useNemoStore } from "@/store";
 import type { LayerId } from "@/lib/types";
@@ -16,11 +17,12 @@ import { Slider, Toggle, Tooltip } from "@/components/primitives";
 import { cn } from "@/lib/cn";
 
 const ICON: Record<LayerId, LucideIcon> = {
-  sites: RadioTower,
-  beams: Zap,
-  arcs: Spline,
-  backhaul: Cable,
+  buildings: Building2,
+  rays: Waves,
+  masts: RadioTower,
+  proposed: TowerControl,
   deadzone: CircleSlash,
+  services: Siren,
   labels: Tag,
 };
 

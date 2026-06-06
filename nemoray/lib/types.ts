@@ -181,12 +181,15 @@ export interface Proposal {
 }
 
 // ── map surface contract ────────────────────────────────────────────────────
+// One id per controllable group on the deck.gl surface (DeckScene). Each maps to one
+// or more deck layer ids — see MAP_LAYER_IDS in components/map/DeckScene.tsx.
 export type LayerId =
-  | "beams"
-  | "arcs"
-  | "sites"
+  | "buildings"
+  | "rays"
+  | "masts"
+  | "proposed"
   | "deadzone"
-  | "backhaul"
+  | "services"
   | "labels";
 
 export interface LayerState {

@@ -9,16 +9,18 @@
  * masts, coverage holes and London place labels, on a tokenless CARTO Dark Matter
  * basemap (MapLibre + MapboxOverlay).
  *
- * Masts are drawn as procedural white/red comms-mast columns scaled to each site's
- * height with a beacon dot on top (blue = existing EE, gold = cuOpt-proposed). The
+ * Masts are drawn as procedural red/white 3D lattice towers (PathLayer polylines:
+ * four tapered legs, rung rings, X-bracing and a spire) scaled to each site's height
+ * with a beacon dot on top (blue = existing EE, gold = cuOpt-proposed). The
  * emergency-services feed (police / fire / hospital) is point-matched to the OSM
  * footprint each station sits in, that whole footprint is painted in the service colour,
  * and a map-pin from `/icons/*.svg` floats above it with the name revealed on zoom-in.
  *
- * It is a self-contained map *surface*: it reads the pipeline artifacts from
- * `/raytracing/*` (+ the `/api/emergency-services` feed) and reads NO store
- * (INVARIANTS §2 — surfaces take data, not the store). Mounted as the centre-stage
- * background in {@link AppShell}.
+ * It is a map *surface*: it reads the pipeline artifacts from `/raytracing/*` (+ the
+ * `/api/emergency-services` feed) and reads NO store (INVARIANTS §2 — surfaces take
+ * props, not the store). Layer visibility/opacity arrive as the `layers` prop from
+ * {@link MapMount} (the one component that reads the store), wiring the left-rail
+ * "Map Layers" toggles to the scene. Mounted as the centre-stage background in AppShell.
  */
 
 import { useEffect, useRef } from "react";
@@ -34,7 +36,7 @@ import {
 } from "@deck.gl/core";
 import {
   GeoJsonLayer,
-  ColumnLayer,
+  PathLayer,
   ScatterplotLayer,
   IconLayer,
   TextLayer,
@@ -43,6 +45,19 @@ import { TripsLayer } from "@deck.gl/geo-layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import type { Color, Position, Layer, LayersList } from "@deck.gl/core";
 import type { Feature, GeoJSON, MultiPolygon, Polygon } from "geojson";
+import type { LayerId, LayerState } from "@/lib/types";
+
+// Which deck layer ids each left-rail toggle (LayerId) controls:
+//   buildings → "buildings"
+//   rays      → "rays"
+//   masts     → "masts-lattice", "masts-dot"          (existing EE)
+//   proposed  → "newmasts-lattice", "newmasts-dot"    (cuOpt-proposed)
+//   deadzone  → "holes"
+//   services  → "service-icons", "service-labels", + the service-colour fill on matched
+//               footprints inside the "buildings" layer (recoloured when services flips)
+//   labels    → "labels", "label-dots", + "service-labels" (station names are text labels,
+//               so they hide when EITHER Emergency Services OR Labels is off)
+type LayerVis = Record<LayerId, LayerState>;
 
 // Where the pipeline artifacts are served from (nemoray/public/raytracing).
 const DATA = "/raytracing";
@@ -69,15 +84,19 @@ const MATERIAL = {
 };
 
 // ---- Antenna / mast styling -----------------------------------------------
-// Masts render as a bold procedural "comms mast": a white tower with a red top band
-// (the aviation red/white marking) and a coloured beacon dot on top — blue for existing
-// EE masts, gold for cuOpt-proposed ones. (glTF tower meshes were tried but deck.gl's
-// loader rendered them unreliably; flat columns are guaranteed visible and read cleanly.)
+// Masts render as a proper 3D lattice tower (the "red and white with lines" look): a
+// tapered square lattice of polylines — four legs, horizontal rung rings and X-bracing,
+// capped by a spire — banded in aviation red/white up its height. A coloured beacon dot
+// tops each one (blue for existing EE masts, gold for cuOpt-proposed). The lattice geometry
+// is ported from the retired Cesium SitefinderTowerLayer, rebuilt on a deck.gl PathLayer.
 const MAST_WHITE: RGB = [232, 236, 244];
 const MAST_RED: RGB = [226, 58, 53];
 const MAST_DOT_EE: RGB = [40, 130, 255]; // blue beacon → existing EE masts
 const MAST_DOT_NEW: RGB = [255, 200, 60]; // gold beacon → cuOpt-proposed masts
-const MAST_RADIUS_M = 3; // tower half-width
+// Screen-space line widths (px) for the lattice members — legs boldest, bracing finest.
+const LATTICE_LEG_W = 2.4;
+const LATTICE_RUNG_W = 1.5;
+const LATTICE_BRACE_W = 1.2;
 // Minimum render height so a short rooftop mast still reads as a tower, not a speck.
 const MIN_TOWER_M = 14;
 
@@ -120,21 +139,67 @@ const RSS_MIN = -115,
   RSS_MAX = -45;
 const BOUNCE_LOSS = 6; // dB lost per reflection/diffraction
 
-// Key London landmarks within the simulated square, as orientation pointers.
+// Key London places within the simulated square (Bankside/Bermondsey in the west out to
+// Canary Wharf/Greenwich), as orientation pointers. Each carries a `tier` that sets the
+// zoom its label reveals at — tier 0 = major hub/district (shown across the overview),
+// 1 = notable area/landmark, 2 = finer POI (only on zoom-in). This is the Google-Maps-style
+// declutter: the wide view shows just the main names, detail fills in as you zoom, and
+// everything clears when you pull right back past the overview (see labelTierVisible).
+type LandmarkTier = 0 | 1 | 2;
 interface Landmark {
   name: string;
   lng: number;
   lat: number;
+  tier: LandmarkTier;
 }
 const LANDMARKS: Landmark[] = [
-  { name: "City of London", lng: -0.091, lat: 51.515 },
-  { name: "Canary Wharf", lng: -0.0195, lat: 51.505 },
-  { name: "The Shard", lng: -0.0865, lat: 51.5045 },
-  { name: "Tower Bridge", lng: -0.0754, lat: 51.5055 },
-  { name: "Shoreditch", lng: -0.078, lat: 51.5265 },
-  { name: "Liverpool St", lng: -0.0817, lat: 51.518 },
-  { name: "Greenwich", lng: -0.009, lat: 51.481 },
+  // Tier 0 — major hubs / districts, visible across the overview.
+  { name: "City of London", lng: -0.091, lat: 51.515, tier: 0 },
+  { name: "Canary Wharf", lng: -0.0195, lat: 51.505, tier: 0 },
+  { name: "Shoreditch", lng: -0.078, lat: 51.5265, tier: 0 },
+  { name: "Greenwich", lng: -0.009, lat: 51.481, tier: 0 },
+  { name: "Bermondsey", lng: -0.064, lat: 51.498, tier: 0 },
+  // Tier 1 — notable areas / landmarks, reveal at mid zoom.
+  { name: "The Shard", lng: -0.0865, lat: 51.5045, tier: 1 },
+  { name: "Tower Bridge", lng: -0.0754, lat: 51.5055, tier: 1 },
+  { name: "Tower of London", lng: -0.0759, lat: 51.5081, tier: 1 },
+  { name: "Liverpool St", lng: -0.0817, lat: 51.518, tier: 1 },
+  { name: "Bank", lng: -0.0886, lat: 51.5134, tier: 1 },
+  { name: "Borough", lng: -0.0922, lat: 51.5012, tier: 1 },
+  { name: "Elephant & Castle", lng: -0.1003, lat: 51.4946, tier: 1 },
+  { name: "Whitechapel", lng: -0.0613, lat: 51.5195, tier: 1 },
+  { name: "Aldgate", lng: -0.0755, lat: 51.5143, tier: 1 },
+  { name: "Wapping", lng: -0.0578, lat: 51.5043, tier: 1 },
+  { name: "Bethnal Green", lng: -0.0553, lat: 51.527, tier: 1 },
+  { name: "Hoxton", lng: -0.0807, lat: 51.532, tier: 1 },
+  { name: "Limehouse", lng: -0.0386, lat: 51.5122, tier: 1 },
+  { name: "Poplar", lng: -0.0176, lat: 51.5085, tier: 1 },
+  { name: "Rotherhithe", lng: -0.0524, lat: 51.501, tier: 1 },
+  { name: "Surrey Quays", lng: -0.0478, lat: 51.4933, tier: 1 },
+  { name: "Deptford", lng: -0.0265, lat: 51.479, tier: 1 },
+  { name: "Mile End", lng: -0.0334, lat: 51.5253, tier: 1 },
+  // Tier 2 — finer POIs / streets, only on zoom-in.
+  { name: "The Gherkin", lng: -0.0803, lat: 51.5145, tier: 2 },
+  { name: "Monument", lng: -0.086, lat: 51.5101, tier: 2 },
+  { name: "Fenchurch St", lng: -0.078, lat: 51.5115, tier: 2 },
+  { name: "Spitalfields", lng: -0.0755, lat: 51.5193, tier: 2 },
+  { name: "Brick Lane", lng: -0.0716, lat: 51.5219, tier: 2 },
+  { name: "Columbia Road", lng: -0.07, lat: 51.53, tier: 2 },
+  { name: "Shadwell", lng: -0.0568, lat: 51.5117, tier: 2 },
+  { name: "Canada Water", lng: -0.0498, lat: 51.498, tier: 2 },
+  { name: "West India Quay", lng: -0.022, lat: 51.507, tier: 2 },
+  { name: "Mudchute", lng: -0.014, lat: 51.491, tier: 2 },
+  { name: "Cutty Sark", lng: -0.0096, lat: 51.4827, tier: 2 },
 ];
+
+// Google-Maps-style label declutter: each tier reveals at its own zoom, so the wide
+// overview shows only the major hubs and finer places fill in on zoom-in — and tier 0's
+// floor clears every label when the camera pulls right back past the overview.
+const LABEL_TIER_MIN_ZOOM: Record<LandmarkTier, number> = { 0: 10.5, 1: 13.2, 2: 14.3 };
+const LABEL_TIER_SIZE: Record<LandmarkTier, number> = { 0: 13.5, 1: 12, 2: 10.5 };
+const LABEL_TIER_DOT_M: Record<LandmarkTier, number> = { 0: 42, 1: 32, 2: 24 };
+const labelTierVisible = (tier: LandmarkTier, zoom: number) =>
+  zoom >= LABEL_TIER_MIN_ZOOM[tier];
 
 interface Bounds {
   west: number;
@@ -417,61 +482,137 @@ function toHoles(fc: HoleFC | null): Hole[] {
   });
 }
 
-// A procedural comms mast per site: a white tower (lower 80%), a red top band (upper
-// 20%, sitting on top of the white via its z-base) and a billboarded beacon dot above
-// it. The dot stays visible as a pixel-sized point from any distance, so the antenna
-// field reads as a clear "where are the masts" map even when zoomed out.
-function antennaLayers(idPrefix: string, masts: Mast[], dot: RGB): Layer[] {
+// One polyline member of a lattice tower: its world-space path, colour and pixel width.
+interface LatticePath {
+  path: Position[];
+  color: RGB;
+  width: number;
+}
+
+// The altitude (m) of the spire tip of a `vh`-metre mast — where the beacon dot sits.
+// Mirrors the spire maths in latticeSegments so the dot caps the tower with no gap.
+function mastTopZ(vh: number): number {
+  const height = Math.max(14, vh);
+  return height + Math.max(3, height * 0.14);
+}
+
+// Build the polyline members of one tapered square lattice tower anchored at `pos` and
+// rising `vh` metres, appending them to `out`. Geometry ported from the retired Cesium
+// SitefinderTowerLayer.buildLatticeTower: four legs, closed rung rings at each level,
+// X-bracing across each face between levels, and a spire on top. The local east/north/up
+// offsets (metres) are converted to lng/lat deltas + altitude so a single PathLayer can
+// draw every tower in the field. Members are banded red/white up the height (aviation
+// marking) — even levels red, odd white, rungs always white for contrast.
+function latticeSegments(pos: Position, vh: number, out: LatticePath[]): void {
+  const [lng, lat] = pos;
+  const height = Math.max(14, vh);
+  const baseHalf = Math.min(Math.max(height * 0.09, 3), 9); // slender, like a real mast
+  const topHalf = baseHalf * 0.32;
+  const mPerDegLat = 110540;
+  const mPerDegLng = 111320 * Math.cos((lat * Math.PI) / 180);
+  // Local east(x)/north(y)/up(z) metre offset → [lng, lat, altitude-m].
+  const world = (x: number, y: number, z: number): Position => [
+    lng + x / mPerDegLng,
+    lat + y / mPerDegLat,
+    z,
+  ];
+  // Four corners of the square cross-section, tapering from baseHalf to topHalf.
+  const signs: ReadonlyArray<readonly [number, number]> = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+  const corner = (i: number, t: number): Position => {
+    const [sx, sy] = signs[i];
+    const half = baseHalf + (topHalf - baseHalf) * t;
+    return world(sx * half, sy * half, height * t);
+  };
+  const ringPath = (t: number): Position[] => {
+    const r = [corner(0, t), corner(1, t), corner(2, t), corner(3, t)];
+    return [...r, r[0]];
+  };
+
+  const levels = Math.max(3, Math.round(height / 12));
+  for (let l = 0; l < levels; l++) {
+    const t0 = l / levels;
+    const t1 = (l + 1) / levels;
+    const band = l % 2 === 0 ? MAST_RED : MAST_WHITE;
+    // Banded legs + X-bracing for this segment.
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4;
+      out.push({ path: [corner(i, t0), corner(i, t1)], color: band, width: LATTICE_LEG_W });
+      out.push({ path: [corner(i, t0), corner(j, t1)], color: band, width: LATTICE_BRACE_W });
+    }
+    // Rung ring at the foot of the segment (white for contrast against the band).
+    out.push({ path: ringPath(t0), color: MAST_WHITE, width: LATTICE_RUNG_W });
+  }
+  // Cap ring at the top + a red spire above the lattice head.
+  out.push({ path: ringPath(1), color: MAST_WHITE, width: LATTICE_RUNG_W });
+  out.push({
+    path: [world(0, 0, height), world(0, 0, mastTopZ(vh))],
+    color: MAST_RED,
+    width: LATTICE_LEG_W,
+  });
+}
+
+// One PathLayer drawing the red/white lattice towers for every site in `masts`. The
+// members are pure screen-width polylines (no fill, no lighting) so the towers read as a
+// crisp wireframe at any zoom. Real-world-sized geometry, built once into the static scene;
+// the beacon dot that tops each mast is rebuilt per-frame (see buildMastDots).
+function latticeTowers(idPrefix: string, masts: Mast[], st: LayerState): Layer[] {
   if (!masts.length) return [];
+  const segs: LatticePath[] = [];
+  for (const m of masts) latticeSegments(m.pos, m.vh, segs);
   return [
-    new ColumnLayer<Mast>({
-      id: `${idPrefix}-body`,
-      data: masts,
-      diskResolution: 4,
-      radius: MAST_RADIUS_M,
-      angle: 45,
-      extruded: true,
-      getPosition: (d) => d.pos,
-      getElevation: (d) => d.vh * 0.8,
-      getFillColor: [...MAST_WHITE, 255] as Color,
-      material: MATERIAL,
+    new PathLayer<LatticePath>({
+      id: `${idPrefix}-lattice`,
+      data: segs,
+      visible: st.visible,
+      opacity: st.opacity,
+      getPath: (d) => d.path,
+      getColor: (d) => [...d.color, 255] as Color,
+      getWidth: (d) => d.width,
+      widthUnits: "pixels",
+      widthMinPixels: 1,
+      capRounded: true,
+      jointRounded: true,
       pickable: false,
-    }),
-    new ColumnLayer<Mast>({
-      id: `${idPrefix}-cap`,
-      data: masts,
-      diskResolution: 4,
-      radius: MAST_RADIUS_M,
-      angle: 45,
-      extruded: true,
-      // Stack the red cap on top of the white body (column base = the position's z).
-      getPosition: (d) => [d.pos[0], d.pos[1], d.vh * 0.8],
-      getElevation: (d) => d.vh * 0.2,
-      getFillColor: [...MAST_RED, 255] as Color,
-      material: MATERIAL,
-      pickable: false,
-    }),
-    new ScatterplotLayer<Mast>({
-      id: `${idPrefix}-dot`,
-      data: masts,
-      billboard: true,
-      radiusUnits: "pixels",
-      getPosition: (d) => [d.pos[0], d.pos[1], d.vh + 5],
-      getRadius: 5,
-      radiusMinPixels: 3,
-      radiusMaxPixels: 8,
-      getFillColor: [...dot, 255] as Color,
-      stroked: true,
-      lineWidthMinPixels: 1.4,
-      getLineColor: [8, 12, 18, 255],
     }),
   ];
 }
 
-// The static (non-animated) layers — buildings, antennas, emergency services, holes
-// and labels. Built once and reused across animation frames so the glTF models aren't
-// reloaded and instance attributes aren't recomputed every tick.
-function buildStaticLayers(data: SceneData): LayersList {
+// The billboarded beacon dot atop each mast (blue = EE, gold = proposed), sized by the
+// live zoom `scale` so it reads as a clear point up close and shrinks to a subtle speck
+// on zoom-out. Rebuilt per frame against markerScale().
+function buildMastDots(
+  idPrefix: string,
+  masts: Mast[],
+  dot: RGB,
+  scale: number,
+  st: LayerState,
+): ScatterplotLayer<Mast> {
+  return new ScatterplotLayer<Mast>({
+    id: `${idPrefix}-dot`,
+    data: masts,
+    visible: st.visible,
+    opacity: st.opacity,
+    billboard: true,
+    radiusUnits: "pixels",
+    // Sit exactly on the spire tip (no gap), and draw on top regardless of depth so the
+    // beacon never gets occluded by the tower or nearby buildings when zoomed in.
+    getPosition: (d) => [d.pos[0], d.pos[1], mastTopZ(d.vh)],
+    getRadius: 5 * scale,
+    radiusMinPixels: 3 * scale,
+    radiusMaxPixels: 8 * scale,
+    getFillColor: [...dot, 255] as Color,
+    stroked: true,
+    lineWidthMinPixels: 1.4,
+    getLineColor: [8, 12, 18, 255],
+    parameters: { depthCompare: "always" },
+  });
+}
+
+// The static (non-animated) layers — buildings, antennas, holes and place labels. Built
+// once and reused across animation frames so instance attributes aren't recomputed every
+// tick; rebuilt only when a layer toggle/opacity changes (see the animate loop's gate).
+// `vis` carries each toggle's visibility + opacity from the store.
+function buildStaticLayers(data: SceneData, vis: LayerVis): LayersList {
   const L: LayersList = [];
 
   if (data.buildings)
@@ -479,21 +620,26 @@ function buildStaticLayers(data: SceneData): LayersList {
       new GeoJsonLayer<BuildingProps>({
         id: "buildings",
         data: data.buildings,
+        visible: vis.buildings.visible,
         extruded: true,
         wireframe: false,
-        opacity: 0.92,
+        opacity: 0.92 * vis.buildings.opacity,
         material: MATERIAL,
         getElevation: (f) => f.properties.height || 9,
         // A footprint matched to an emergency service is wrapped wholesale in that
-        // service's colour; everything else keeps the short→tall height ramp.
+        // service's colour — but only while the Emergency Services toggle is on; with it
+        // off the footprint falls back to the normal short→tall height ramp, so toggling
+        // services off removes the colour too (not just the pins/names).
         getFillColor: (f) =>
-          f.properties.service
+          f.properties.service && vis.services.visible
             ? ([...SERVICE_COLOR[f.properties.service], 255] as Color)
             : mix(
                 BUILDING_SHORT,
                 BUILDING_TALL,
                 clamp01((f.properties.height || 9) / BUILDING_HEIGHT_REF),
               ),
+        // Recompute the fill when the services toggle flips (data ref is unchanged).
+        updateTriggers: { getFillColor: vis.services.visible },
         pickable: false,
       }),
     );
@@ -503,6 +649,8 @@ function buildStaticLayers(data: SceneData): LayersList {
       new ScatterplotLayer<Hole>({
         id: "holes",
         data: data.holes,
+        visible: vis.deadzone.visible,
+        opacity: vis.deadzone.opacity,
         radiusUnits: "meters",
         radiusMinPixels: 2,
         getPosition: (d) => d.pos,
@@ -512,67 +660,19 @@ function buildStaticLayers(data: SceneData): LayersList {
       }),
     );
 
-  // Emergency services: a map-pin floating just above each colour-wrapped footprint.
-  // The station / hospital name appears automatically when the camera is close (see
-  // the proximity label layer, rebuilt per-frame against the live zoom).
-  if (data.markers.length)
-    L.push(
-      new IconLayer<Marker>({
-        id: "service-icons",
-        data: data.markers,
-        billboard: true,
-        sizeUnits: "pixels",
-        getIcon: (d) => SERVICE_ICON[d.type],
-        getPosition: (d) => [d.pos[0], d.pos[1], d.h + 6],
-        getSize: 34,
-        sizeMinPixels: 20,
-        sizeMaxPixels: 46,
-        pickable: false,
-      }),
-    );
+  // Emergency services: the colour-wrapped footprints are static; the floating map-pin
+  // and the auto-revealing station name are both rebuilt per-frame against the live zoom
+  // (buildServiceIcons / buildServiceLabels) so the pin shrinks on zoom-out.
 
-  // Antennas: white/red comms masts sized to site height — existing EE masts get a blue
-  // beacon dot, cuOpt-proposed masts a gold one.
-  L.push(...antennaLayers("masts", data.masts, MAST_DOT_EE));
-  L.push(...antennaLayers("newmasts", data.newMasts, MAST_DOT_NEW));
+  // Antennas: red/white 3D lattice towers sized to site height — EE follow the Cell Masts
+  // toggle, cuOpt-proposed the Proposed Masts toggle. Their beacon dots (blue = EE, gold =
+  // proposed) are rebuilt per-frame so they shrink on zoom-out (buildMastDots).
+  L.push(...latticeTowers("masts", data.masts, vis.masts));
+  L.push(...latticeTowers("newmasts", data.newMasts, vis.proposed));
 
-  // Place labels last so they sit on top — orientation pointers in the UI theme.
-  L.push(
-    new ScatterplotLayer<Landmark>({
-      id: "label-dots",
-      data: LANDMARKS,
-      getPosition: (d) => [d.lng, d.lat],
-      radiusUnits: "meters",
-      getRadius: 40,
-      radiusMinPixels: 3,
-      radiusMaxPixels: 6,
-      getFillColor: [33, 212, 253, 230],
-      stroked: true,
-      lineWidthMinPixels: 1.2,
-      getLineColor: [8, 12, 18, 255],
-    }),
-  );
-  L.push(
-    new TextLayer<Landmark>({
-      id: "labels",
-      data: LANDMARKS,
-      getPosition: (d) => [d.lng, d.lat],
-      getText: (d) => d.name,
-      getSize: 12.5,
-      sizeUnits: "pixels",
-      getColor: [226, 232, 242, 240],
-      billboard: true,
-      getPixelOffset: [0, -12],
-      getTextAnchor: "middle",
-      getAlignmentBaseline: "bottom",
-      fontFamily: "system-ui, sans-serif",
-      fontWeight: 600,
-      characterSet: "auto",
-      background: true,
-      getBackgroundColor: [10, 15, 23, 195],
-      backgroundPadding: [6, 3, 6, 3],
-    }),
-  );
+  // Place labels are NOT built here: they're rebuilt per-frame against the live zoom so
+  // the tiers reveal/declutter as the camera moves (buildLabelLayers, appended last in the
+  // animate loop so they sit on top).
 
   return L;
 }
@@ -581,12 +681,58 @@ function buildStaticLayers(data: SceneData): LayersList {
 // "in proximity" — and hide again on zoom-out so the wide view stays uncluttered.
 const SERVICE_LABEL_ZOOM = 14;
 
-// Name labels for every service pin, shown only when `visible` (the live zoom is past
-// SERVICE_LABEL_ZOOM). Rebuilt per-frame so it tracks zoom without rebuilding the scene.
-function buildServiceLabels(markers: Marker[], visible: boolean): TextLayer<Marker> {
+// Markers (service pins + mast beacon dots) shrink toward a floor as the camera pulls
+// back, so the wide view reads as a calm overview and only fills in marker detail on
+// zoom-in. Eased smoothly between MIN (fully shrunk) and FULL (full size) zoom.
+const MARKER_MIN_ZOOM = 12; // at/below: markers at their minimum size
+const MARKER_FULL_ZOOM = 14.5; // at/above: markers at full size
+const MARKER_MIN_SCALE = 0.34; // smallest fraction of full size when zoomed right out
+
+// 0..1 size factor for the live zoom, never dropping below MARKER_MIN_SCALE so pins/dots
+// stay as subtle points rather than vanishing entirely when far out.
+function markerScale(zoom: number): number {
+  const t = clamp01((zoom - MARKER_MIN_ZOOM) / (MARKER_FULL_ZOOM - MARKER_MIN_ZOOM));
+  return MARKER_MIN_SCALE + (1 - MARKER_MIN_SCALE) * t;
+}
+
+// The emergency-service map-pins, sized by the live zoom `scale` so they shrink on
+// zoom-out alongside the mast dots. Rebuilt per frame against markerScale().
+function buildServiceIcons(
+  markers: Marker[],
+  scale: number,
+  st: LayerState,
+): IconLayer<Marker> {
+  return new IconLayer<Marker>({
+    id: "service-icons",
+    data: markers,
+    visible: st.visible,
+    opacity: st.opacity,
+    billboard: true,
+    sizeUnits: "pixels",
+    getIcon: (d) => SERVICE_ICON[d.type],
+    getPosition: (d) => [d.pos[0], d.pos[1], d.h + 6],
+    getSize: 34 * scale,
+    sizeMinPixels: 20 * scale,
+    sizeMaxPixels: 46 * scale,
+    pickable: false,
+  });
+}
+
+// Name labels for every service pin. Shown only when `nearEnough` (the live zoom is past
+// SERVICE_LABEL_ZOOM) AND both the Emergency Services and Labels toggles are on — these
+// names are emergency-service text, so they answer to either toggle being switched off.
+// Rebuilt per-frame so it tracks zoom without rebuilding the scene.
+function buildServiceLabels(
+  markers: Marker[],
+  nearEnough: boolean,
+  services: LayerState,
+  labels: LayerState,
+): TextLayer<Marker> {
   return new TextLayer<Marker>({
     id: "service-labels",
-    data: visible ? markers : [],
+    data: nearEnough ? markers : [],
+    visible: services.visible && labels.visible,
+    opacity: services.opacity * labels.opacity,
     getPosition: (d) => [d.pos[0], d.pos[1], d.h + 6],
     getText: (d) => `${SERVICE_LABEL[d.type]} · ${d.name}`,
     getSize: 12.5,
@@ -605,15 +751,62 @@ function buildServiceLabels(markers: Marker[], visible: boolean): TextLayer<Mark
   });
 }
 
+// The place labels + their dots, filtered to the tiers visible at the live zoom — the
+// Google-Maps declutter (major hubs across the overview, finer POIs only on zoom-in, all
+// gone when the camera pulls right back). Rebuilt per-frame like the service labels so the
+// reveal tracks zoom without rebuilding the static scene; major hubs render a touch larger.
+function buildLabelLayers(zoom: number, st: LayerState): [ScatterplotLayer<Landmark>, TextLayer<Landmark>] {
+  const shown = LANDMARKS.filter((d) => labelTierVisible(d.tier, zoom));
+  return [
+    new ScatterplotLayer<Landmark>({
+      id: "label-dots",
+      data: shown,
+      visible: st.visible,
+      opacity: st.opacity,
+      getPosition: (d) => [d.lng, d.lat],
+      radiusUnits: "meters",
+      getRadius: (d) => LABEL_TIER_DOT_M[d.tier],
+      radiusMinPixels: 2.5,
+      radiusMaxPixels: 6,
+      getFillColor: [33, 212, 253, 230],
+      stroked: true,
+      lineWidthMinPixels: 1.2,
+      getLineColor: [8, 12, 18, 255],
+    }),
+    new TextLayer<Landmark>({
+      id: "labels",
+      data: shown,
+      visible: st.visible,
+      opacity: st.opacity,
+      getPosition: (d) => [d.lng, d.lat],
+      getText: (d) => d.name,
+      getSize: (d) => LABEL_TIER_SIZE[d.tier],
+      sizeUnits: "pixels",
+      getColor: [226, 232, 242, 240],
+      billboard: true,
+      getPixelOffset: [0, -12],
+      getTextAnchor: "middle",
+      getAlignmentBaseline: "bottom",
+      fontFamily: "system-ui, sans-serif",
+      fontWeight: 600,
+      characterSet: "auto",
+      background: true,
+      getBackgroundColor: [10, 15, 23, 195],
+      backgroundPadding: [6, 3, 6, 3],
+    }),
+  ];
+}
+
 // The single animated layer — the signal-ray trips, advanced each frame by `time`.
-function buildRaysLayer(trips: Trip[], time: number): TripsLayer<Trip> {
+function buildRaysLayer(trips: Trip[], time: number, st: LayerState): TripsLayer<Trip> {
   return new TripsLayer<Trip>({
     id: "rays",
     data: trips,
+    visible: st.visible,
     getPath: (d) => d.path,
     getTimestamps: (d) => d.timestamps,
     getColor: (d) => d.color,
-    opacity: 0.8,
+    opacity: 0.8 * st.opacity,
     widthUnits: "pixels",
     getWidth: 2.4,
     widthMinPixels: 2,
@@ -625,8 +818,28 @@ function buildRaysLayer(trips: Trip[], time: number): TripsLayer<Trip> {
   });
 }
 
-export function DeckScene() {
+// A short signature of just the layer states that affect the *static* layers
+// (buildings / masts / proposed / deadzone), so the animate loop only rebuilds those — an
+// expensive operation (re-tessellates the lattice towers) — when one of those toggles or
+// opacities actually changes, not every frame. The services *visibility* is included too
+// (on/off only — not its opacity) because it recolours matched footprints in the static
+// buildings layer; the service pins/names and place labels are per-frame layers.
+function staticSig(l: LayerVis): string {
+  const groups = (["buildings", "masts", "proposed", "deadzone"] as const)
+    .map((k) => `${l[k].visible ? 1 : 0}:${l[k].opacity}`)
+    .join("|");
+  return `${groups}|svc:${l.services.visible ? 1 : 0}`;
+}
+
+export function DeckScene({ layers }: { layers: LayerVis }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  // The map is built once in an effect that never re-runs; the animate loop reads the
+  // latest layer states through this ref so toggles take effect without remounting the map.
+  // Synced from props in its own effect (refs must not be written during render).
+  const layersRef = useRef(layers);
+  useEffect(() => {
+    layersRef.current = layers;
+  }, [layers]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -705,19 +918,35 @@ export function DeckScene() {
         holes: toHoles(holesFC),
       };
 
-      // Build the static layers once; only the rays + proximity labels are rebuilt per frame.
-      const staticLayers = buildStaticLayers(data);
+      // Static layers are rebuilt only when a layer toggle/opacity changes (tracked by
+      // staticSig); the rays, mast beacon dots and service pins/names rebuild every frame
+      // (they animate or track zoom) and read their visibility straight from layersRef.
+      let staticLayers = buildStaticLayers(data, layersRef.current);
+      let lastSig = staticSig(layersRef.current);
 
       let time = 0;
       const animate = () => {
         if (cancelled || !overlay) return;
         time = (time + ANIMATION_SPEED) % LOOP_LENGTH;
-        const nearEnough = (map?.getZoom() ?? 0) >= SERVICE_LABEL_ZOOM;
+        const L = layersRef.current;
+        const sig = staticSig(L);
+        if (sig !== lastSig) {
+          staticLayers = buildStaticLayers(data, L);
+          lastSig = sig;
+        }
+        const zoom = map?.getZoom() ?? 0;
+        const nearEnough = zoom >= SERVICE_LABEL_ZOOM;
+        const scale = markerScale(zoom);
         overlay.setProps({
           layers: [
             ...staticLayers,
-            buildRaysLayer(data.trips, time),
-            buildServiceLabels(data.markers, nearEnough),
+            buildRaysLayer(data.trips, time, L.rays),
+            buildMastDots("masts", data.masts, MAST_DOT_EE, scale, L.masts),
+            buildMastDots("newmasts", data.newMasts, MAST_DOT_NEW, scale, L.proposed),
+            buildServiceIcons(data.markers, scale, L.services),
+            buildServiceLabels(data.markers, nearEnough, L.services, L.labels),
+            // Place labels last so they sit on top, zoom-tiered for the Google-Maps declutter.
+            ...buildLabelLayers(zoom, L.labels),
           ],
         });
         raf = requestAnimationFrame(animate);

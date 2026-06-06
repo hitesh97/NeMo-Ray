@@ -6,21 +6,27 @@ export interface LayerMeta {
   hint: string;
 }
 
-/** Map-layer toggles shown in the left rail (order matters). */
+/**
+ * Map-layer toggles shown in the left rail (order matters). Each id controls a real
+ * group of layers on the deck.gl surface — see MAP_LAYER_IDS in
+ * components/map/DeckScene.tsx for the id→deck-layer mapping.
+ */
 export const LAYER_META: LayerMeta[] = [
-  { id: "sites", label: "Site Locations", hint: "Cell tower positions" },
-  { id: "beams", label: "Coverage Beams", hint: "Per-site emission shafts" },
-  { id: "arcs", label: "User Density", hint: "Subscriber load arcs" },
-  { id: "backhaul", label: "Backhaul Links", hint: "Inter-site backhaul" },
+  { id: "buildings", label: "Buildings", hint: "Extruded OSM footprints" },
+  { id: "rays", label: "Coverage Rays", hint: "Animated signal traces" },
+  { id: "masts", label: "Cell Masts (EE)", hint: "Existing EE antenna sites" },
+  { id: "proposed", label: "Proposed Masts", hint: "cuOpt-proposed sites" },
   { id: "deadzone", label: "Dead Zones", hint: "Coverage holes" },
-  { id: "labels", label: "Labels", hint: "Site & boundary labels" },
+  { id: "services", label: "Emergency Services", hint: "Police / fire / hospital pins" },
+  { id: "labels", label: "Labels", hint: "Place & landmark labels" },
 ];
 
 export const DEFAULT_LAYERS: Record<LayerId, LayerState> = {
-  sites: { visible: true, opacity: 1 },
-  beams: { visible: true, opacity: 0.9 },
-  arcs: { visible: true, opacity: 0.7 },
-  backhaul: { visible: false, opacity: 0.6 },
+  buildings: { visible: true, opacity: 1 },
+  rays: { visible: true, opacity: 1 },
+  masts: { visible: true, opacity: 1 },
+  proposed: { visible: true, opacity: 1 },
   deadzone: { visible: true, opacity: 1 },
+  services: { visible: true, opacity: 1 },
   labels: { visible: true, opacity: 1 },
 };
