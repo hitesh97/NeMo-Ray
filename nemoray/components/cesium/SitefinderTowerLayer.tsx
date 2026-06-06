@@ -31,6 +31,17 @@ const CAMERA_UPDATE_MS = 220;
 // Fixed display distance for tower entities — avoids recomputing per-camera-move
 const TOWER_MAX_DISPLAY_DISTANCE = 16000;
 
+// London ground sits ~tens of metres above the WGS84 ellipsoid (geoid undulation
+// ≈ +46 m). If terrain sampling hasn't resolved yet we must NOT anchor to 0 —
+// that drops the model ~45 m below the photorealistic tiles, hiding it and
+// leaving only the depth-disabled dots visible. Use this provisional ground
+// height until the real tile surface is known, and keep re-sampling.
+const LONDON_GROUND_FALLBACK_M = 46;
+// How long to wait before re-sampling sites whose tiles weren't streamed in yet.
+const TERRAIN_RESAMPLE_MS = 600;
+// Stop re-sampling after this many consecutive no-progress passes.
+const MAX_TERRAIN_RESAMPLES = 8;
+
 const SELECTED_OUTLINE = Cesium.Color.fromCssColorString('#ffe34d').withAlpha(1);
 const ACTIVE_OUTLINE = Cesium.Color.fromCssColorString('#ff9c33').withAlpha(0.96);
 
@@ -167,21 +178,49 @@ function buildTowerEntities(
   return entities;
 }
 
+// Resolve the photorealistic-tile surface height under each site. Returns ONLY
+// the heights that resolved to a real surface — sites whose tiles hadn't
+// streamed in yet are omitted (not set to 0), so the caller re-samples them
+// rather than caching a bad value that buries the model underground.
 async function sampleSiteHeights(
   viewer: Cesium.Viewer,
-  sites: SitefinderTowerSite[]
+  sites: SitefinderTowerSite[],
+  // Exclude our own tower entities so a previously-placed (fallback-height)
+  // model can't be clamped/sampled onto instead of the actual tile surface.
+  exclude: object[]
 ): Promise<Map<string, number>> {
   const result = new Map<string, number>();
-  if (sites.length === 0 || !viewer.scene.sampleHeightSupported) {
-    sites.forEach((s) => result.set(s.id, 0));
-    return result;
-  }
+  if (sites.length === 0) return result;
+
+  const isValid = (h: number | undefined): h is number =>
+    typeof h === 'number' && Number.isFinite(h) && Math.abs(h) > 1e-3;
+
   try {
-    const carts = sites.map((s) => Cesium.Cartographic.fromDegrees(s.lng, s.lat));
-    const sampled = await viewer.scene.sampleHeightMostDetailed(carts);
-    sites.forEach((s, i) => result.set(s.id, sampled[i]?.height ?? 0));
+    // clampToHeightMostDetailed is the 3D-Tiles-aware API — it loads the most
+    // detailed tiles at each point first, so it reads the real Google city
+    // surface rather than the (disabled) globe.
+    if (viewer.scene.clampToHeightSupported) {
+      const positions = sites.map((s) => Cesium.Cartesian3.fromDegrees(s.lng, s.lat, 0));
+      const clamped = await viewer.scene.clampToHeightMostDetailed(positions, exclude);
+      sites.forEach((s, i) => {
+        const c = clamped[i];
+        if (!Cesium.defined(c)) return;
+        const h = Cesium.Cartographic.fromCartesian(c).height;
+        if (isValid(h)) result.set(s.id, h);
+      });
+      return result;
+    }
+
+    if (viewer.scene.sampleHeightSupported) {
+      const carts = sites.map((s) => Cesium.Cartographic.fromDegrees(s.lng, s.lat));
+      const sampled = await viewer.scene.sampleHeightMostDetailed(carts, exclude);
+      sites.forEach((s, i) => {
+        const h = sampled[i]?.height;
+        if (isValid(h)) result.set(s.id, h);
+      });
+    }
   } catch {
-    sites.forEach((s) => result.set(s.id, 0));
+    // Leave unresolved sites out — the caller retries on the next pass.
   }
   return result;
 }
@@ -199,9 +238,15 @@ export default function SitefinderTowerLayer({
   const handlerRef = useRef<Cesium.ScreenSpaceEventHandler | null>(null);
   const siteLookupRef = useRef(new Map<string, SitefinderTowerSite>());
   const visibleSitesRef = useRef<SitefinderTowerSite[]>([]);
-  // Terrain heights cached permanently — never re-sampled for the same site
+  // Cache of resolved tile-surface heights. Only *valid* heights are stored —
+  // sites whose tiles weren't streamed in yet stay absent so they re-sample.
   const terrainCacheRef = useRef(new Map<string, number>());
   const [detailedSiteIds, setDetailedSiteIds] = useState<string[]>([]);
+  // Bumped whenever new terrain heights resolve: drives the dot layer to re-anchor
+  // to the ground and schedules a re-sample for any still-unresolved sites.
+  const [terrainVersion, setTerrainVersion] = useState(0);
+  // Caps re-sampling so a site that never resolves can't poll forever.
+  const resampleAttemptsRef = useRef(0);
 
   const visibleSites = useMemo(
     () => sites.filter((site) => siteMatchesTypes(site, activeTypes)),
@@ -273,9 +318,14 @@ export default function SitefinderTowerLayer({
 
     visibleSites.forEach((site) => {
       const sel = selectedSiteId === site.id;
+      // Anchor the dot to its site's resolved tile-surface height so it sits at
+      // the antenna's base (same lng/lat AND same ground), keeping the marker and
+      // the model in sync and clicks accurate. Fall back to the London ground
+      // height until that site's terrain has been sampled.
+      const groundHeight = terrainCacheRef.current.get(site.id) ?? LONDON_GROUND_FALLBACK_M;
       pts.add({
         id: { layer: 'sitefinder', siteId: site.id } satisfies SitefinderPickId,
-        position: Cesium.Cartesian3.fromDegrees(site.lng, site.lat, 42),
+        position: Cesium.Cartesian3.fromDegrees(site.lng, site.lat, groundHeight),
         color: getSitePrimaryColor(site, sel ? 1 : 0.86),
         outlineColor: sel ? SELECTED_OUTLINE : ACTIVE_OUTLINE,
         outlineWidth: sel ? 5 : 2,
@@ -291,7 +341,7 @@ export default function SitefinderTowerLayer({
         pointCollectionRef.current = null;
       }
     };
-  }, [selectedSiteId, viewer, visibleSites]);
+  }, [selectedSiteId, viewer, visibleSites, terrainVersion]);
 
   useEffect(() => {
     if (!viewer) return;
@@ -328,9 +378,10 @@ export default function SitefinderTowerLayer({
 
       const fresh: Cesium.Entity[] = [];
       detailedSites.forEach((site) => {
-        fresh.push(
-          ...buildTowerEntities(viewer, site, selectedSiteId === site.id, cache.get(site.id) ?? 0)
-        );
+        // Unresolved sites render at the London ground fallback (never 0, which
+        // would bury them ~45 m under the tiles) until their tiles stream in.
+        const groundHeight = cache.get(site.id) ?? LONDON_GROUND_FALLBACK_M;
+        fresh.push(...buildTowerEntities(viewer, site, selectedSiteId === site.id, groundHeight));
       });
 
       if (!active) {
@@ -347,15 +398,33 @@ export default function SitefinderTowerLayer({
 
     const uncached = detailedSites.filter((s) => !terrainCacheRef.current.has(s.id));
 
+    let resampleTimer: ReturnType<typeof setTimeout> | null = null;
+
     if (uncached.length === 0) {
       // All terrain heights already known — build synchronously, no async gap
+      resampleAttemptsRef.current = 0;
       build(terrainCacheRef.current);
     } else {
       (async () => {
-        const newHeights = await sampleSiteHeights(viewer, uncached);
+        const newHeights = await sampleSiteHeights(viewer, uncached, entitiesRef.current);
         if (!active) return;
         newHeights.forEach((h, id) => terrainCacheRef.current.set(id, h));
         build(terrainCacheRef.current);
+
+        // Sites still missing a height (tiles not streamed in yet) were rendered
+        // at the fallback. Bump the version so the dot layer re-anchors any that
+        // did resolve, and re-run shortly to snap the stragglers onto the tiles —
+        // capped so a permanently-unresolvable site can't poll forever.
+        if (newHeights.size > 0) {
+          resampleAttemptsRef.current = 0;
+          setTerrainVersion((v) => v + 1);
+        }
+        if (newHeights.size < uncached.length && resampleAttemptsRef.current < MAX_TERRAIN_RESAMPLES) {
+          resampleAttemptsRef.current += 1;
+          resampleTimer = setTimeout(() => {
+            if (active) setTerrainVersion((v) => v + 1);
+          }, TERRAIN_RESAMPLE_MS);
+        }
       })();
     }
 
@@ -364,8 +433,9 @@ export default function SitefinderTowerLayer({
       // Do NOT remove entitiesRef.current here — the next effect run will swap them out
       // without leaving an empty frame. The viewer-level cleanup effect handles unmount.
       active = false;
+      if (resampleTimer) clearTimeout(resampleTimer);
     };
-  }, [detailedSiteIds, selectedSiteId, viewer]);
+  }, [detailedSiteIds, selectedSiteId, viewer, terrainVersion]);
 
   // Final cleanup when viewer goes away (component unmount or viewer destroyed)
   useEffect(() => {
