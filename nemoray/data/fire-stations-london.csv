@@ -1,0 +1,117 @@
+OBJECTID,Borough,Holding_Name,Address,Post_Code,UPRN,Easting,Northing
+1,Ealing,ACTON,27 Gunnersbury Lane,W3 8EA,,519693.0,180087.0
+2,Croydon,ADDINGTON,197-199 Lodge Lane,CR0 0QA,,537713.0,163274.0
+3,Barking and Dagenham,BARKING (including workshop),"Alfred's Way, Barking, Essex",IG11 0BB,,544987.0,183294.0
+4,Barnet,BARNET,144 Station Road,EN5 1TE,,525594.0,195828.0
+5,Wandsworth,BATTERSEA,11 Este Road ,SW11 2TL,,527254.0,175842.0
+6,Bromley,BECKENHAM,8 Beckenham Road,BR3 4LR,,536819.0,169511.0
+7,Tower Hamlets,BETHNAL GREEN,11 Roman Road,E2 0HU,,535127.0,182792.0
+8,Bexley,BEXLEY,"172 Erith Road, Bexleyheath",DA7 6BY,,549713.0,175769.0
+9,Bromley,BIGGIN HILL,2 Kingsmead,TN16 3UB,,541872.0,159129.0
+10,Waltham Forest,WALTHAMSTOW,343 Forest Road,E17 5JR,,536652.0,189726.0
+11,Wandsworth,WANDSWORTH,"45 West Hill, Wandsworth",SW18 1RL,,525058.0,174584.0
+12,Brent,WEMBLEY,591a Harrow Road,HA0 2EG,,517690.0,184992.0
+13,Havering,WENNINGTON,Wennington Road,RM13 9EE,,554191.0,180900.0
+14,Camden,WEST HAMPSTEAD,325 West End Lane,NW6 1RR,,525384.0,185185.0
+16,Tower Hamlets,WHITECHAPEL,27 Commercial Road,E1 1LD,,534073.0,181364.0
+17,Brent,WILLESDEN,59a Pound Lane,NW10 2HH,,522352.0,184288.0
+18,Merton,WIMBLENDON,87 Kingston Road,SW19 1JN,,525437.0,170050.0
+19,Redbridge,WOODFORD,2 Snakes Lane,IG8 0BS,,540245.0,192022.0
+20,Croydon,WOODSIDE,"2 Long Lane, Addiscombe Road, Croydon ",CR0 7AL,,534944.0,166981.0
+21,Havering,HAROLD HILL,"Unit 7, 8 and 9 Falcon Business Centre, Spilsbury Rd",RM3 8QN,,554184.0,191156.0
+22,Merton,MITCHAM,"421-445 London Road, Mitcham, Surrey ",CR4 4BJ,,527227.0,168057.0
+23,Lambeth,WEST NORWOOD,"210 Knights Hill, West Norwood",SE27 0QA,,531802.0,171366.0
+24,Lambeth,BRIXTON,"84 Gresham Road, Brixton",SW9 7NP,,531414.0,175557.0
+25,Bromley,BROMLEY,"4 South Street, Bromley, Kent",BR1 1RH,,540386.0,169489.0
+26,Kensington and Chelsea,CHELSEA,264 Kings Road,SW3 5UF,,527131.0,178061.0
+27,Waltham Forest,CHINGFORD,34 The Ridgeway,E4 6PP,,538190.0,194190.0
+28,Hounslow,CHISWICK,2-4 Heathfield Gardens,W4 4JY,,520272.0,178258.0
+29,Lambeth,CLAPHAM,29 Old Town,SW4 0JT,,529259.0,175637.0
+30,Islington,CLERKENWELL,42-44 Rosebery Avenue,EC1R 4RN,,531186.0,182306.0
+31,Croydon,CROYDON,90 Old Town,CR0 1AR,,531968.0,165046.0
+32,Barking and Dagenham,DAGENHAM,70 Rainham Road North,RM10 7ES,,549622.0,186714.0
+33,Lewisham,DEPTFORD,186 Evelyn Street,SE5 8PR,,533586.0,176741.0
+34,Southwark,DOCKHEAD,8 Wolseley Street,SE1 2BP,,534016.0,179750.0
+35,City of London,DOWGATE,94-95 Upper Thames Street,EC4R 3UE,,532628.0,180728.0
+36,Ealing,EALING,60-64 Uxbridge Road,W13 8RA,,517090.0,180596.0
+37,Greenwich,EAST GREENWICH,"235 Woolwich Road, London",SE7 7RF,,540506.0,178384.0
+38,Newham,EAST HAM,210 High Street South,E6 3RS,,542787.0,182495.0
+39,Enfield,EDMONTON,99 Church Street,N9 9AA,,533749.0,193822.0
+40,Greenwich,ELTHAM,266 Eltham High Street,SE9 1BA,,543194.0,174414.0
+41,Enfield,ENFIELD,93 Carterhatch Lane,EN1 4LA,,534836.0,197522.0
+42,Bexley,ERITH,"52 Erith Road, Belvedere Kent",DA17 6HR,,549830.0,178500.0
+43,Camden,EUSTON,172 Euston Road,NW1 2DH,,529767.0,182633.0
+44,Hounslow,FELTHAM,101 Faggs Road,TW14 0LH,,510290.0,174716.0
+45,Barnet,FINCHLEY,227 Long Lane,N3 2RP,,526194.0,190347.0
+46,Lewisham,FOREST HILL,155 Stansted Road,SE23 1HP,,535961.0,173331.0
+47,Hammersmith and Fulham,FULHAM,685 Fulham Road,SW6 5UJ,,525034.0,176953.0
+48,Greenwich,GREENWICH,4 Blisset Street,SE10 8UP,,538047.0,176858.0
+49,Redbridge,HAINAULT,368-388 New North Road,IG6 3DY,,545824.0,191801.0
+50,Hammersmith and Fulham,HAMMERSMITH,190-192 Shepherds Bush Road,W6 7NL,,523352.0,178696.0
+51,Harrow,HARROW ,500 Pinner Road,HA5 5RW,,513266.0,189284.0
+52,Hillingdon,HAYES,65 Shepiston Lane,UB3 1LL,,508980.0,178442.0
+53,Hillingdon,HEATHROW,"Building 450, Heathrow Airport Northern Perimeter Road",TW6 2RR,,507150.0,176824.0
+54,Barnet,HENDON,"91 The Burroughs, Hendon",NW4 4BL,,522801.0,189270.0
+55,Hounslow,HESTON,"520 London Road Isleworth, Middlesex",TW7 4HR,,515158.0,176432.0
+56,Hillingdon,HILLINGDON,Uxbridge Road,UB10 0PH,,507447.0,182597.0
+57,Islington,HOLLOWAY,262-268 Hornsey Road,N7 7QT,,530695.0,186428.0
+58,Hackney,HOMERTON,97 Homerton High Street,E9 5DL,,535687.0,185105.0
+59,Havering,HORNCHURCH,42 North Street,RM11 1SH,,554022.0,187412.0
+60,Haringey,HORNSEY,108 Park Avenue South,N8 8LS,,529840.0,189177.0
+61,Redbridge,ILFORD,460 High Road,IG1 1UE,,544973.0,186873.0
+62,Islington,ISLINGTON,278 Upper Street,N1 2TZ,,531715.0,184100.0
+63,Kensington and Chelsea,KENSINGTON,"13 Old Court, Kensington High Street",W8 4PL,,525707.0,179785.0
+64,Camden,KENTISH TOWN,"20 Highgate Road, London",NW5 1NS,,528938.0,185409.0
+65,Kingston Upon Thames,KINGSTON,390 Richmond Road,KT2 5PR,,517841.0,171411.0
+66,Lambeth,LAMBETH,8 Albert Embankment,SE1 7SD,,530590.0,178749.0
+67,Lambeth,LAMBETH PONTOON,Opposite 8 Albert Embankment,SE1 7SD,,530590.0,178749.0
+68,Greenwich,LEE GREEN,9 Eltham Road,SE12 8ES,,539919.0,174994.0
+69,Lewisham,LEWISHAM,249/259 Lewisham High Street,SE13 6NH,,538135.0,174991.0
+70,Waltham Forest,LEYTON,90B Church Road,E10 5HG,,537563.0,186778.0
+71,Waltham Forest,LEYTONSTONE,466 High Road,E11 3HN,,539336.0,186549.0
+72,Barnet,MILL HILL,10 Hartley Avenue,NW7 2HX,,521731.0,192140.0
+73,Tower Hamlets,MILLWALL,43 West Ferry Rd,E14 8JH,,537139.0,179840.0
+74,Merton,Former MITCHAM ,"30 Lower Green West, Mitcham",CR4 3AF,,527507.0,168583.0
+75,Lewisham,NEW CROSS,266 Queen's Road,SE14 5JN,,535575.0,176755.0
+76,Merton,NEW MALDEN,180 Burlington Road,KT3 4RW,,522160.0,168125.0
+77,Croydon,NORBURY,1321/1325A London Road,SW16 4AU,,530745.0,169200.0
+78,Kensington and Chelsea,NORTH KENSINGTON,242 Ladbroke Grove,W10 5LP,,524141.0,181842.0
+79,Ealing,NORTHOLT,74 Petts Hill,UB5 4JT,,513826.0,185238.0
+80,Southwark,OLD KENT ROAD,405 Old Kent Road,SE1 5JH,,533856.0,178225.0
+81,Bromley,ORPINGTON,Avalon Road,BR6 9AX,,547014.0,165807.0
+82,Westminster,PADDINGTON,156 Harrow Road,W2 6NL,,526138.0,181711.0
+83,Brent,PARK ROYAL,Waxlow Road,NW10 7NU,,520424.0,183305.0
+84,Southwark,PECKHAM,78-80 Peckham Road,SE5 8PR,,533586.0,176741.0
+85,Newham,PLAISTOW,145 Prince Regent Lane,E13 8RY,,541111.0,182192.0
+86,Greenwich,PLUMSTEAD,"1 Lakedale Road, Plumstead",SE18 1PP,,545321.0,178562.0
+87,Tower Hamlets,POPLAR,168 East India Dock Road,E14 0BP,,537872.0,180958.0
+88,Croydon,PURLEY,128 Brighton Road,CR8 4DB,,530705.0,160863.0
+89,Richmond Upon Thames,RICHMOND,"323 Lower Richmond Road, Richmond, Surrey",TW9 4PN,,519223.0,175665.0
+90,Havering,ROMFORD,198 Pettits Lane North,RM1 4NU,,551192.0,190569.0
+91,Hillingdon,RUISLIP,Bury Street,HA4 7TW,,508387.0,188879.0
+92,Tower Hamlets,SHADWELL,290 Cable Street,E1 0BX,,535009.0,180894.0
+93,Hackney,SHOREDITCH,235 Old Street,EC1V 9EY,,532905.0,182595.0
+94,Bexley,SIDCUP,162 Main Road,DA14 6NZ,,545705.0,171849.0
+95,Westminster,SOHO,126 Shaftesbury Avenue,W1D 5ET,,529861.0,180939.0
+96,Ealing,SOUTHALL,17-19 High Street,UB1 3HA,,512912.0,180409.0
+97,Enfield,SOUTHGATE,96 High Street,N14 6BN,,529711.0,194068.0
+98,Southwark,SOUTHWARK (including Southwark Training Centre),94 Southwark Bridge Road,SE1 0EG,,532098.0,179880.0
+99,Harrow,STANMORE,650 Honeypot Lane,HA7 1JS,,518012.0,190803.0
+100,Hackney,STOKE NEWINGTON,64 Stoke Newington Church Street,N16 0AP,,533401.0,186603.0
+101,Newham,STRATFORD,117 Romford Road,E15 4LY,,539555.0,184684.0
+102,Kingston Upon Thames,SURBITON,"31/33 Ewell Road, Surbiton",KT6 6AF,,518517.0,167282.0
+103,Sutton,SUTTON,43 St Dunstans Hill,SM1 2JX,,524634.0,164834.0
+104,Wandsworth,TOOTING,91 Trinity Road,SW17 7SQ,,527772.0,172570.0
+105,Haringey,TOTTENHAM,49 St Loys Road ,N17 6UE,,533661.0,189929.0
+106,Richmond Upon Thames,TWICKENHAM,30 South Road ,TW2 5NT,,514945.0,171978.0
+107,Sutton,WALLINGTON,19 Belmont Road,SM6 8TE,,529015.0,164222.0
+108,Southwark,UNION STREET (HQ) ,"169 Union St, Southwark",SE1 0LL,,532066.0,180012.0
+109,Lambeth,OLD HQ (Main building and Rear Block),"8 Albert Embankment, Lambeth",SE1 7SP,,530523.0,178781.0
+110,Merton,MERTON RCC,61 Morden Road,SW19 3XP,,525871.0,169471.0
+111,Southwark,GROTTO PLACE,"Sawyer Street, Southwark",SE1 0EG,,532104.0,179851.0
+112,Hillingdon,RUSLIP WORKSHOPS,800 Field End Road,HA4 0QH,,512393.0,185471.0
+113,Kensington & Chelsea,DISUSED TOILETS,206 Brompton Road,SW3 2BQ,,527209.0,179185.0
+114,Haringey,FORMER BOUNDS GREEN FIRE STATION,"69 Bounds Green Road, Haringey",N22 8DG,,530231.0,190990.0
+115,Southwark,GALLIARD CAR PARK (28 SPACES),"98-118 Southwark Bridge Road, Southwark",SE1 0BX,,532087.0,179774.0
+116,Croydon,PURLEY WAY STORES,"Unit 3, 40-44 Purley Way, Purley",CR0 3JP,,530800.0,166723.0
+117,Croydon,PEGASUS SITE,"Unit 1, Pegasus Road, Croydon",,,,

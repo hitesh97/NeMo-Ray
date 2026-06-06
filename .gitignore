@@ -1,27 +1,38 @@
-# ---- Python ----
-.venv/
-venv/
-__pycache__/
-*.pyc
-*.egg-info/
-.ipynb_checkpoints/
+# Root .gitignore — app-specific ignores live in nemoray/.gitignore
 
-# ---- Node / Next.js (nemoray) ----
+# Dependencies (safety net; the app also ignores these locally)
 node_modules/
-.next/
-out/build/
-next-env.d.ts
-*.tsbuildinfo
-.turbo/
-.vercel/
+.pnpm-store/
 
-# ---- Env / secrets ----
+# Python / uv (uv.lock is committed; only local artifacts are ignored)
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+
+# Secrets / environment
 .env
-.env.local
-.env*.local
-!.env.template
+.env.*
+!.env.example
 
-# ---- OS / editor ----
+# Claude Code local settings
+.claude/settings.json
+.claude/settings.local.json
+
+# Editors / OS
 .DS_Store
-*.log
 Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+plans/
+datasets/

@@ -1,0 +1,81 @@
+/* Local design-system CSS must be imported BEFORE Tailwind. Under Tailwind v4 /
+   Lightning CSS, `@import "tailwindcss"` expands inline to real rules; any plain
+   `@import` that follows it then sits in a spec-illegal position and its rule
+   bodies are silently dropped from the build (the token :root vars and every
+   .nm-* class vanished, so text fell back to the browser-default 16px on every
+   page). Importing the design system first keeps all @imports spec-legal and
+   their content in the output. */
+@import "./styles/tokens/colors.css";
+@import "./styles/tokens/typography.css";
+@import "./styles/tokens/spacing.css";
+@import "./styles/tokens/base.css";
+@import "./styles/components.css";
+@import "tailwindcss";
+
+/* ────────────────────────────────────────────────────────────────────────
+   NeMo-Ray design system — "de-robotised" mission control.
+   Neutral slate surfaces · restrained NVIDIA-green accent · soft rounded
+   cards · Manrope + JetBrains Mono telemetry.
+
+   Token source of truth: app/styles/tokens/*.css (the nemoray-design
+   system). The @theme block below MIRRORS those tokens under the legacy
+   --color-* names so existing Tailwind utilities (bg-panel, text-ink,
+   border-hairline, …) keep working but resolve to the new values. New
+   code should prefer the .nm-* classes and raw var(--…) tokens.
+   ──────────────────────────────────────────────────────────────────────── */
+
+@theme {
+  /* surfaces */
+  --color-bg: var(--surface-bg);
+  --color-bg-2: var(--surface-base);
+  --color-panel: var(--surface-raised);
+  --color-panel-2: var(--surface-overlay);
+  --color-surface: var(--surface-base);
+  --color-elevated: var(--surface-elevated);
+
+  /* lines */
+  --color-hairline: var(--line);
+  --color-hairline-strong: var(--line-strong);
+  --color-grid: var(--grid-line);
+
+  /* brand — keep the `nv` family so bg-nv / text-nv / border-nv survive */
+  --color-nv: var(--nv-green);
+  --color-nv-bright: var(--nv-green-bright);
+  --color-nv-dim: var(--nv-green-dim);
+  --color-nv-glow: var(--nv-green-glow);
+
+  /* text */
+  --color-ink: var(--text-primary);
+  --color-ink-dim: var(--text-tertiary);
+  --color-ink-faint: var(--text-faint);
+
+  /* status */
+  --color-nominal: var(--status-nominal);
+  --color-warning: var(--status-warning);
+  --color-critical: var(--status-critical);
+  --color-info: var(--status-info);
+
+  /* signal ramp — VIVID (mirror of lib/geo/color.ts; legend ↔ map parity) */
+  --color-sig-critical: var(--signal-critical);
+  --color-sig-low: var(--signal-low);
+  --color-sig-medium: var(--signal-medium);
+  --color-sig-good: var(--signal-good);
+  --color-sig-excellent: var(--signal-excellent);
+
+  /* type — bound to next/font CSS vars from app/layout.tsx */
+  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-manrope), ui-sans-serif, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, "SFMono-Regular", monospace;
+
+  /* radius — legacy sharp 2px is now the soft card radius */
+  --radius-hud: var(--radius-card);
+}
+
+/* body text defaults (surface/colour/overflow come from layout.tsx utilities) */
+body {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
