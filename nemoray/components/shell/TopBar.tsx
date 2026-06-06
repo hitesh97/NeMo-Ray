@@ -16,13 +16,12 @@ export function TopBar() {
         <span className="text-[12px] font-bold uppercase tracking-[0.14em] text-ink">
           {APP.org}
         </span>
-        <span className="mx-0.5 h-4 w-px bg-hairline-strong" />
-        <span className="nm-eyebrow text-nv">{APP.title}</span>
-        <span className="mx-0.5 hidden h-4 w-px bg-hairline-strong sm:block" />
-        <span className="nm-eyebrow hidden text-ink-faint sm:inline">
-          {APP.network} for {APP.region}
-        </span>
       </div>
+
+      {/* centred title */}
+      <span className="nm-eyebrow pointer-events-none absolute left-1/2 hidden -translate-x-1/2 text-ink sm:inline">
+        {APP.network} for {APP.region}
+      </span>
 
       {/* right cluster */}
       <div className="ml-auto flex items-center gap-3">

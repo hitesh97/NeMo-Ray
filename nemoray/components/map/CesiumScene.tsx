@@ -1,12 +1,15 @@
 "use client";
 
 import * as Cesium from "cesium";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import CesiumViewer from "@/components/cesium/CesiumViewer";
 import CesiumPostProcess from "@/components/cesium/CesiumPostProcess";
 import PhotorealisticTiles from "@/components/cesium/PhotorealisticTiles";
+import SitefinderTowers from "@/components/cesium/SitefinderTowers";
+import EmergencyServices from "@/components/cesium/EmergencyServices";
 import { CesiumCameraController } from "@/lib/cesium/camera/CesiumCameraController";
+import type { SitefinderTowerSite } from "@/types/sitefinder";
 import type { MapSurfaceProps } from "@/lib/types";
 
 /**
@@ -14,9 +17,10 @@ import type { MapSurfaceProps } from "@/lib/types";
  * {@link MapSurfaceProps} so it slots behind `MapMount` where `MapPlaceholder`
  * used to sit, filling its parent cell so the HUD rails/timeline reflow around it.
  *
- * Renders the Google Photorealistic city. Owns one `CesiumCameraController`
- * built when the viewer is ready (no polling), runs the single animated intro
- * flight, and honours `cameraCommand` intents dispatched from HUD chrome.
+ * Renders the Google Photorealistic city plus the live Sitefinder antenna/tower
+ * layer. Owns one `CesiumCameraController` built when the viewer is ready (no
+ * polling), runs the single animated intro flight, and honours `cameraCommand`
+ * intents dispatched from HUD chrome.
  */
 export function CesiumScene({ cameraCommand }: MapSurfaceProps) {
   const controllerRef = useRef<CesiumCameraController | null>(null);
@@ -29,6 +33,10 @@ export function CesiumScene({ cameraCommand }: MapSurfaceProps) {
     controller.flyInFromGlobe(() => controller.configureControls());
     controllerRef.current = controller;
   };
+
+  const handleSelectSite = useCallback((site: SitefinderTowerSite | null) => {
+    if (site) controllerRef.current?.flyToSite(site, "inspect");
+  }, []);
 
   // Honour one-shot camera intents (nonce-deduped so a remount can't re-fire).
   useEffect(() => {
@@ -64,6 +72,8 @@ export function CesiumScene({ cameraCommand }: MapSurfaceProps) {
         onReady={handleReady}
       >
         <PhotorealisticTiles />
+        <SitefinderTowers onSelectSite={handleSelectSite} />
+        <EmergencyServices />
         <CesiumPostProcess />
       </CesiumViewer>
     </div>

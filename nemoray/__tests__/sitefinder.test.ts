@@ -27,6 +27,17 @@ describe('Sitefinder parser', () => {
     expect(site?.maxAntennaHeightMeters).toBe(21);
   });
 
+  test('corrects OSGB36 coordinates to WGS84 (datum shift applied)', () => {
+    const payload = parseSitefinderCsv(CSV);
+    const site = payload.sites.find((item) => item.opref === 'ATN0051');
+
+    // Raw CSV is OSGB36 (51.46557, -0.095904); output must be the WGS84-shifted
+    // position (~124 m WNW), not the raw value.
+    expect(site?.lat).toBeCloseTo(51.46608, 4);
+    expect(site?.lng).toBeCloseTo(-0.09751, 4);
+    expect(site?.lat).not.toBeCloseTo(51.46557, 4);
+  });
+
   test('handles blank power fields and unknown transmission types', () => {
     const payload = parseSitefinderCsv(CSV);
     const unknown = payload.transmissions.find((transmission) => transmission.opref === 'VF001');

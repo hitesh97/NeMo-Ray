@@ -20,7 +20,6 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 export const APP = {
   org: "NeMo-Ray",
   product: "NeMo-Ray",
-  title: "AI-RAN",
   subtitle: "DIGITAL TWIN // REAL-TIME",
   region: "London",
   network: "Emergency Services Network (ESN)",

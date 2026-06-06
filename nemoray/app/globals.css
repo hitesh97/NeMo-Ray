@@ -1,9 +1,16 @@
-@import "tailwindcss";
+/* Local design-system CSS must be imported BEFORE Tailwind. Under Tailwind v4 /
+   Lightning CSS, `@import "tailwindcss"` expands inline to real rules; any plain
+   `@import` that follows it then sits in a spec-illegal position and its rule
+   bodies are silently dropped from the build (the token :root vars and every
+   .nm-* class vanished, so text fell back to the browser-default 16px on every
+   page). Importing the design system first keeps all @imports spec-legal and
+   their content in the output. */
 @import "./styles/tokens/colors.css";
 @import "./styles/tokens/typography.css";
 @import "./styles/tokens/spacing.css";
 @import "./styles/tokens/base.css";
 @import "./styles/components.css";
+@import "tailwindcss";
 
 /* ────────────────────────────────────────────────────────────────────────
    NeMo-Ray design system — "de-robotised" mission control.
