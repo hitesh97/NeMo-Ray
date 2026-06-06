@@ -41,6 +41,7 @@ export async function POST(req: Request): Promise<Response> {
 
     if (!upstream.ok || !upstream.body) {
       const detail = await upstream.text().catch(() => "");
+      console.error(`[tts] ElevenLabs ${upstream.status}:`, detail);
       return new Response(
         JSON.stringify({ error: "text-to-speech failed", status: upstream.status, detail }),
         { status: 502, headers: { "Content-Type": "application/json" } },

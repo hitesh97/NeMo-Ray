@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import { delay } from "@/lib/api/client";
+import { type VadState } from "@/hooks/useVoice";
 import type { AgentRequest } from "@/lib/api/agent";
 import { DEFAULT_LAYERS } from "@/lib/layers";
 import { DEFAULT_SCENARIO, SCENARIOS } from "@/lib/scenarios";
@@ -92,10 +93,12 @@ interface NemoState {
   voiceRecording: boolean;
   voiceTranscribing: boolean;
   voiceSpeaking: boolean;
+  voiceVadState: VadState;
   setVoiceAvailable(v: boolean): void;
   setVoiceRecording(v: boolean): void;
   setVoiceTranscribing(v: boolean): void;
   setVoiceSpeaking(v: boolean): void;
+  setVoiceVadState(s: VadState): void;
 
   // ── camera ──
   cameraCommand: CameraCommand | null;
@@ -313,10 +316,12 @@ export const useNemoStore = create<NemoState>((set, get) => ({
   voiceRecording: false,
   voiceTranscribing: false,
   voiceSpeaking: false,
+  voiceVadState: "idle" as VadState,
   setVoiceAvailable: (v) => set({ voiceAvailable: v }),
   setVoiceRecording: (v) => set({ voiceRecording: v }),
   setVoiceTranscribing: (v) => set({ voiceTranscribing: v }),
   setVoiceSpeaking: (v) => set({ voiceSpeaking: v }),
+  setVoiceVadState: (s) => set({ voiceVadState: s }),
 
   // ── camera ──
   cameraCommand: null,

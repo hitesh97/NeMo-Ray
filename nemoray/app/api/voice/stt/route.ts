@@ -7,6 +7,22 @@
 
 const STT_ENDPOINT = "https://api.elevenlabs.io/v1/speech-to-text";
 
+async function isolateAudio(
+  key: string,
+  buf: ArrayBuffer,
+  contentType: string,
+): Promise<ArrayBuffer> {
+  const form = new FormData();
+  form.append("audio", new Blob([buf], { type: contentType }), "audio.webm");
+  const res = await fetch("https://api.elevenlabs.io/v1/audio-isolation", {
+    method: "POST",
+    headers: { "xi-api-key": key },
+    body: form,
+  });
+  if (!res.ok) throw new Error(`isolation ${res.status}`);
+  return res.arrayBuffer();
+}
+
 export async function POST(req: Request): Promise<Response> {
   const key = process.env.ELEVENLABS_API_KEY;
   if (!key) {
@@ -34,8 +50,14 @@ export async function POST(req: Request): Promise<Response> {
           ? "ogg"
           : "webm";
 
+    const isolated = await isolateAudio(key, audio, contentType).catch((e: unknown) => {
+      console.warn("[stt] audio isolation failed, using raw audio:", e);
+      return null;
+    });
+    const finalAudio = isolated ?? audio;
+
     const form = new FormData();
-    form.append("file", new Blob([audio], { type: contentType }), `audio.${ext}`);
+    form.append("file", new Blob([finalAudio], { type: contentType }), `audio.${ext}`);
     form.append("model_id", "scribe_v1");
 
     const upstream = await fetch(STT_ENDPOINT, {

@@ -5,7 +5,6 @@ import { CornerDownLeft, Loader2, Mic, Volume2, VolumeX } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/primitives";
-import { useStreamingAgent } from "@/hooks/useStreamingAgent";
 import { useAutoSpeakLatest, useVoice } from "@/hooks/useVoice";
 import { useNemoStore } from "@/store";
 
@@ -19,14 +18,27 @@ export function AgentComposer({ className }: { className?: string }) {
   const [value, setValue] = useState("");
   const [autoSpeak, setAutoSpeak] = useState(false);
   const streaming = useNemoStore((s) => s.streaming);
-  const { sendPrompt } = useStreamingAgent();
+  const addOperatorMessage = useNemoStore((s) => s.addOperatorMessage);
+  const requestAgentRun = useNemoStore((s) => s.requestAgentRun);
+
+  const sendPrompt = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      addOperatorMessage(trimmed);
+      requestAgentRun({ prompt: trimmed });
+    },
+    [addOperatorMessage, requestAgentRun],
+  );
+
   const {
     available,
     recording,
     transcribing,
     speaking,
-    startRecording,
-    stopRecording,
+    vadState,
+    toggleRecording,
+    stopSpeaking,
     speak,
   } = useVoice();
 
@@ -51,25 +63,25 @@ export function AgentComposer({ className }: { className?: string }) {
     }
   };
 
-  // Push-to-talk — hold the mic to record, release to transcribe + send.
-  const onMicDown = useCallback(() => {
+  // Toggle mic — click to start VAD recording; click again (or VAD auto-commits) to stop.
+  const onMicClick = useCallback(() => {
     if (!available || transcribing || streaming) return;
-    void startRecording();
-  }, [available, transcribing, streaming, startRecording]);
-
-  const onMicUp = useCallback(() => {
-    if (recording) stopRecording();
-  }, [recording, stopRecording]);
+    void toggleRecording();
+  }, [available, transcribing, streaming, toggleRecording]);
 
   const canSend = value.trim().length > 0 && !streaming;
 
   const placeholder = streaming
     ? "Agent is responding…"
-    : recording
-      ? "Listening… release to send"
-      : transcribing
-        ? "Transcribing…"
-        : "Ask the AI agent — type or hold the mic…";
+    : vadState === "listening"
+      ? "Listening… click mic to cancel"
+      : vadState === "speech_detected" || vadState === "in_speech"
+        ? "Speaking… click mic to stop"
+        : vadState === "post_speech_silence"
+          ? "Finishing…"
+          : transcribing
+            ? "Transcribing…"
+            : "Ask the AI agent — type or click the mic…";
 
   return (
     <div className={cn("shrink-0 border-t border-hairline bg-panel/60", className)}>
@@ -77,25 +89,27 @@ export function AgentComposer({ className }: { className?: string }) {
         {available && (
           <button
             type="button"
-            aria-label="Hold to talk"
+            aria-label={recording ? "Stop recording" : "Start recording"}
             aria-pressed={recording}
             disabled={transcribing || streaming}
-            onPointerDown={onMicDown}
-            onPointerUp={onMicUp}
-            onPointerLeave={onMicUp}
+            onClick={onMicClick}
             className={cn(
               "flex h-8 w-8 shrink-0 items-center justify-center border transition-colors",
               "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-nv",
               "disabled:cursor-not-allowed disabled:opacity-40",
-              recording
+              vadState === "in_speech" || vadState === "speech_detected"
                 ? "border-critical bg-critical/10 text-critical"
-                : "border-hairline text-ink-dim hover:border-nv hover:text-nv",
+                : vadState === "listening"
+                  ? "border-hairline-strong text-ink-dim"
+                  : vadState === "post_speech_silence"
+                    ? "border-info text-info"
+                    : "border-hairline text-ink-dim hover:border-nv hover:text-nv",
             )}
           >
             {transcribing ? (
               <Loader2 size={14} className="animate-spin" />
             ) : (
-              <Mic size={14} className={cn(recording && "nm-pulse")} />
+              <Mic size={14} className={cn((vadState === "in_speech" || vadState === "speech_detected") && "nm-pulse")} />
             )}
           </button>
         )}
@@ -121,7 +135,11 @@ export function AgentComposer({ className }: { className?: string }) {
             type="button"
             aria-label={autoSpeak ? "Mute agent replies" : "Speak agent replies"}
             aria-pressed={autoSpeak}
-            onClick={() => setAutoSpeak((v) => !v)}
+            onClick={() => {
+              const next = !autoSpeak;
+              setAutoSpeak(next);
+              if (!next && speaking) stopSpeaking();
+            }}
             className={cn(
               "flex h-8 w-8 shrink-0 items-center justify-center border transition-colors",
               "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-nv",
@@ -151,25 +169,31 @@ export function AgentComposer({ className }: { className?: string }) {
         <span
           className={cn(
             "h-1 w-1 rounded-full",
-            recording
+            vadState === "in_speech" || vadState === "speech_detected"
               ? "nm-pulse bg-critical"
-              : streaming || transcribing || speaking
-                ? "nm-pulse bg-info"
-                : "bg-ink-faint",
+              : vadState === "listening"
+                ? "bg-ink-dim"
+                : vadState === "post_speech_silence" || streaming || transcribing || speaking
+                  ? "nm-pulse bg-info"
+                  : "bg-ink-faint",
           )}
         />
         <span className="nm-eyebrow text-[9px] text-ink-faint">
-          {recording
-            ? "Listening · release to send"
-            : transcribing
-              ? "Transcribing speech"
-              : streaming
-                ? "Streaming · input locked"
-                : speaking
-                  ? "Speaking reply"
-                  : available
-                    ? "Enter to send · hold mic to talk"
-                    : "Enter to send"}
+          {vadState === "listening"
+            ? "Waiting for speech · click mic to cancel"
+            : vadState === "speech_detected" || vadState === "in_speech"
+              ? "Listening · click mic to stop"
+              : vadState === "post_speech_silence"
+                ? "Finishing…"
+                : transcribing
+                  ? "Transcribing speech"
+                  : streaming
+                    ? "Streaming · input locked"
+                    : speaking
+                      ? "Speaking reply"
+                      : available
+                        ? "Enter to send · click mic to talk"
+                        : "Enter to send"}
         </span>
       </div>
     </div>
