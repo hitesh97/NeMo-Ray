@@ -11,9 +11,9 @@
  *
  * - **Sitefinder masts** — the CSV lat/lng are OSGB36 (they match the
  *   inverse-Transverse-Mercator OSGB36 lat/lng of their National Grid refs to
- *   0.0 m, ~124 m WNW of true WGS84). NB despite that, this layer uses identity,
- *   NOT the datum shift — the ray-tracing pipeline consumes the same raw coords
- *   uncorrected, so the antennas must stay in the rays' frame to align with them.
+ *   0.0 m, ~124 m WNW of true WGS84). ⇒ apply the OSGB36→WGS84 datum shift.
+ *   The ray-tracing pipeline (`src/masts.py`) now applies the same shift, so the
+ *   exported rays/masts and this layer share the corrected WGS84 frame.
  *   See `correctSitefinderLatLng` below.
  * - **MOPAC police-station closures** — four landmark stations checked against
  *   OpenStreetMap (WGS84) sit within ~16–25 m in scattered directions (no
@@ -24,7 +24,7 @@
  * `identityLatLng`. A consistent ~124 m WNW offset ⇒ OSGB36, use `osgb36ToWgs84`.
  * Raw eastings/northings ⇒ `ngrToEastingNorthing` then a grid→WGS84 conversion.
  */
-import { osNationalGridToWgs84, type LatLng } from './osgb';
+import { osgb36ToWgs84, osNationalGridToWgs84, type LatLng } from './osgb';
 
 export type LatLngCorrector = (lat: number, lng: number) => LatLng;
 
@@ -33,18 +33,17 @@ export const identityLatLng: LatLngCorrector = (lat, lng) => ({ lat, lng });
 
 /**
  * Sitefinder masts: stored coordinates ARE OSGB36 geodetic (~124 m WNW of true
- * WGS84) — but we deliberately pass them through unchanged.
+ * WGS84) → apply the OSGB36→WGS84 datum shift so the served masts are true WGS84.
  *
- * The Sionna ray-tracing pipeline (`src/masts.py`) feeds these same raw CSV
- * lat/lng straight into the physics without the datum shift, so every traced ray
- * in `paths.geojson` originates from the uncorrected position. Applying the
- * OSGB36→WGS84 correction here moved the antennas to true WGS84 and left them
- * ~125 m off the rays they belong to. Until the pipeline applies the matching
- * shift, the antenna layer must live in the same (uncorrected) frame as the rays
- * so masts and ray tracing line up. Swap back to `osgb36ToWgs84` once the
- * pipeline is corrected too — see this repo's `src/masts.py`.
+ * The Sionna ray-tracing pipeline (`src/masts.py`) now applies the matching shift
+ * in `load_sites` (via `geo.osgb36_to_wgs84`), so every traced ray in
+ * `paths.geojson` and the exported `masts.geojson` already originate from the
+ * corrected WGS84 position. This corrector keeps the CSV-served masts in that same
+ * frame, so the Network panel (`/api/sitefinder`) and the deck.gl surface agree.
+ * (Previously this was identity, to match the then-uncorrected pipeline; that
+ * workaround is obsolete now the pipeline applies the shift at the source.)
  */
-export const correctSitefinderLatLng: LatLngCorrector = identityLatLng;
+export const correctSitefinderLatLng: LatLngCorrector = (lat, lng) => osgb36ToWgs84(lat, lng);
 
 /** MOPAC police-station closures: verified WGS84 → no correction. */
 export const correctPoliceLatLng: LatLngCorrector = identityLatLng;

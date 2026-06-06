@@ -116,10 +116,10 @@ export function parseSitefinderCsv(csv: string): SitefinderPayload {
     const rawLng = parseNumber(row.Sitelng);
     if (rawLat === null || rawLng === null) return;
 
-    // Sitefinder lat/lng are OSGB36, but the corrector is identity here on
-    // purpose: the Sionna pipeline traces rays from these same raw coords without
-    // the datum shift, so the antennas must stay in that uncorrected frame to sit
-    // on the rays. (See correctSitefinderLatLng in lib/geo/datasetCoordinates.ts.)
+    // Sitefinder lat/lng are OSGB36 geodetic (~125 m off true WGS84). Correct to
+    // WGS84 here so the served masts match the pipeline, which now applies the same
+    // OSGB36→WGS84 shift at the source (src/masts.py via geo.osgb36_to_wgs84).
+    // (See correctSitefinderLatLng in lib/geo/datasetCoordinates.ts.)
     const { lat, lng } = correctSitefinderLatLng(rawLat, rawLng);
 
     const siteKey = makeSiteKey(row, lat, lng);
