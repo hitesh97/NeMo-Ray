@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { correctSitefinderLatLng } from '@/lib/geo/datasetCoordinates';
 import type {
   RawSitefinderRow,
   SitefinderPayload,
@@ -111,9 +112,14 @@ export function parseSitefinderCsv(csv: string): SitefinderPayload {
   const groups = new Map<string, SitefinderTransmission[]>();
 
   rows.forEach((row, index) => {
-    const lat = parseNumber(row.Sitelat);
-    const lng = parseNumber(row.Sitelng);
-    if (lat === null || lng === null) return;
+    const rawLat = parseNumber(row.Sitelat);
+    const rawLng = parseNumber(row.Sitelng);
+    if (rawLat === null || rawLng === null) return;
+
+    // Sitefinder lat/lng are OSGB36 (the source pipeline omitted the datum
+    // shift) — correct to WGS84 so masts align with the photorealistic tiles
+    // instead of landing ~124 m off (e.g. in the Thames).
+    const { lat, lng } = correctSitefinderLatLng(rawLat, rawLng);
 
     const siteKey = makeSiteKey(row, lat, lng);
     const siteId = `sitefinder-${slug(siteKey)}`;
