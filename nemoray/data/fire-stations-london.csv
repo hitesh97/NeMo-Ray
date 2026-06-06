@@ -30,7 +30,7 @@ OBJECTID,Borough,Holding_Name,Address,Post_Code,UPRN,Easting,Northing
 30,Islington,CLERKENWELL,42-44 Rosebery Avenue,EC1R 4RN,,531186.0,182306.0
 31,Croydon,CROYDON,90 Old Town,CR0 1AR,,531968.0,165046.0
 32,Barking and Dagenham,DAGENHAM,70 Rainham Road North,RM10 7ES,,549622.0,186714.0
-33,Lewisham,DEPTFORD,186 Evelyn Street,SE5 8PR,,533586.0,176741.0
+33,Lewisham,DEPTFORD,186 Evelyn Street,SE5 8PR,,536612.9,178045.3
 34,Southwark,DOCKHEAD,8 Wolseley Street,SE1 2BP,,534016.0,179750.0
 35,City of London,DOWGATE,94-95 Upper Thames Street,EC4R 3UE,,532628.0,180728.0
 36,Ealing,EALING,60-64 Uxbridge Road,W13 8RA,,517090.0,180596.0
@@ -47,7 +47,7 @@ OBJECTID,Borough,Holding_Name,Address,Post_Code,UPRN,Easting,Northing
 47,Hammersmith and Fulham,FULHAM,685 Fulham Road,SW6 5UJ,,525034.0,176953.0
 48,Greenwich,GREENWICH,4 Blisset Street,SE10 8UP,,538047.0,176858.0
 49,Redbridge,HAINAULT,368-388 New North Road,IG6 3DY,,545824.0,191801.0
-50,Hammersmith and Fulham,HAMMERSMITH,190-192 Shepherds Bush Road,W6 7NL,,523352.0,178696.0
+50,Hammersmith and Fulham,HAMMERSMITH,190-192 Shepherds Bush Road,W6 7NL,,523363.0,178956.0
 51,Harrow,HARROW ,500 Pinner Road,HA5 5RW,,513266.0,189284.0
 52,Hillingdon,HAYES,65 Shepiston Lane,UB3 1LL,,508980.0,178442.0
 53,Hillingdon,HEATHROW,"Building 450, Heathrow Airport Northern Perimeter Road",TW6 2RR,,507150.0,176824.0
@@ -71,7 +71,6 @@ OBJECTID,Borough,Holding_Name,Address,Post_Code,UPRN,Easting,Northing
 71,Waltham Forest,LEYTONSTONE,466 High Road,E11 3HN,,539336.0,186549.0
 72,Barnet,MILL HILL,10 Hartley Avenue,NW7 2HX,,521731.0,192140.0
 73,Tower Hamlets,MILLWALL,43 West Ferry Rd,E14 8JH,,537139.0,179840.0
-74,Merton,Former MITCHAM ,"30 Lower Green West, Mitcham",CR4 3AF,,527507.0,168583.0
 75,Lewisham,NEW CROSS,266 Queen's Road,SE14 5JN,,535575.0,176755.0
 76,Merton,NEW MALDEN,180 Burlington Road,KT3 4RW,,522160.0,168125.0
 77,Croydon,NORBURY,1321/1325A London Road,SW16 4AU,,530745.0,169200.0
@@ -95,7 +94,6 @@ OBJECTID,Borough,Holding_Name,Address,Post_Code,UPRN,Easting,Northing
 95,Westminster,SOHO,126 Shaftesbury Avenue,W1D 5ET,,529861.0,180939.0
 96,Ealing,SOUTHALL,17-19 High Street,UB1 3HA,,512912.0,180409.0
 97,Enfield,SOUTHGATE,96 High Street,N14 6BN,,529711.0,194068.0
-98,Southwark,SOUTHWARK (including Southwark Training Centre),94 Southwark Bridge Road,SE1 0EG,,532098.0,179880.0
 99,Harrow,STANMORE,650 Honeypot Lane,HA7 1JS,,518012.0,190803.0
 100,Hackney,STOKE NEWINGTON,64 Stoke Newington Church Street,N16 0AP,,533401.0,186603.0
 101,Newham,STRATFORD,117 Romford Road,E15 4LY,,539555.0,184684.0
@@ -107,11 +105,4 @@ OBJECTID,Borough,Holding_Name,Address,Post_Code,UPRN,Easting,Northing
 107,Sutton,WALLINGTON,19 Belmont Road,SM6 8TE,,529015.0,164222.0
 108,Southwark,UNION STREET (HQ) ,"169 Union St, Southwark",SE1 0LL,,532066.0,180012.0
 109,Lambeth,OLD HQ (Main building and Rear Block),"8 Albert Embankment, Lambeth",SE1 7SP,,530523.0,178781.0
-110,Merton,MERTON RCC,61 Morden Road,SW19 3XP,,525871.0,169471.0
-111,Southwark,GROTTO PLACE,"Sawyer Street, Southwark",SE1 0EG,,532104.0,179851.0
-112,Hillingdon,RUSLIP WORKSHOPS,800 Field End Road,HA4 0QH,,512393.0,185471.0
-113,Kensington & Chelsea,DISUSED TOILETS,206 Brompton Road,SW3 2BQ,,527209.0,179185.0
-114,Haringey,FORMER BOUNDS GREEN FIRE STATION,"69 Bounds Green Road, Haringey",N22 8DG,,530231.0,190990.0
-115,Southwark,GALLIARD CAR PARK (28 SPACES),"98-118 Southwark Bridge Road, Southwark",SE1 0BX,,532087.0,179774.0
-116,Croydon,PURLEY WAY STORES,"Unit 3, 40-44 Purley Way, Purley",CR0 3JP,,530800.0,166723.0
 117,Croydon,PEGASUS SITE,"Unit 1, Pegasus Road, Croydon",,,,
