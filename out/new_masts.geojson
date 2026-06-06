@@ -1,1 +1,3 @@
-{"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [-0.04399694090500168, 51.53769521966846]}, "properties": {"id": "new-0", "height_m": 25.0, "covers_holes": 1, "radius_m": 280.0}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-0.08408845410950741, 51.51870813249756]}, "properties": {"id": "new-1", "height_m": 25.0, "covers_holes": 1, "radius_m": 280.0}}]}
+version https://git-lfs.github.com/spec/v1
+oid sha256:2006ff26302f22ec96a320530d23d207ae66365a4be69489ddbce2c8d82800a1
+size 9765

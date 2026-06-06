@@ -1,14 +1,14 @@
 {
   "existing_masts": 2955,
-  "coverage_holes": 2,
-  "holes_coverable": 2,
+  "coverage_holes": 53,
+  "holes_coverable": 53,
   "holes_uncoverable": 0,
-  "candidate_sites": 2,
-  "new_masts": 2,
-  "holes_now_covered": 2,
+  "candidate_sites": 53,
+  "new_masts": 49,
+  "holes_now_covered": 53,
   "coverage_radius_m": 280.0,
   "solver": "NVIDIA cuOpt (hosted MILP)",
   "status": "Optimal",
-  "objective": 2.0,
-  "solve_time_s": 0.031
+  "objective": 49.0,
+  "solve_time_s": 0.029
 }
