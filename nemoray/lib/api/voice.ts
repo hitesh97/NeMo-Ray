@@ -30,6 +30,9 @@ export async function synthesize(text: string, signal?: AbortSignal): Promise<Bl
     body: JSON.stringify({ text }),
     signal,
   });
-  if (!res.ok) throw new Error(`/api/voice/tts → ${res.status}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { detail?: string; error?: string };
+    throw new Error(`/api/voice/tts → ${res.status}: ${body.detail ?? body.error ?? "unknown"}`);
+  }
   return await res.blob();
 }

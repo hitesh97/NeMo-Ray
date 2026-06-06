@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { RotateCcw } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { Button, Panel, PanelHeader, PanelBody, StatusDot } from "@/components/primitives";
-import { useStreamingAgent } from "@/hooks/useStreamingAgent";
 import { useNemoStore } from "@/store";
 import { AgentMessage } from "./AgentMessage";
 import { AgentComposer } from "./AgentComposer";
@@ -24,7 +23,17 @@ export function AgentConsole({ className }: { className?: string }) {
   const messages = useNemoStore((s) => s.messages);
   const streaming = useNemoStore((s) => s.streaming);
   const resetConversation = useNemoStore((s) => s.resetConversation);
-  const { sendPrompt } = useStreamingAgent();
+  const addOperatorMessage = useNemoStore((s) => s.addOperatorMessage);
+  const requestAgentRun = useNemoStore((s) => s.requestAgentRun);
+  const sendPrompt = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      addOperatorMessage(trimmed);
+      requestAgentRun({ prompt: trimmed });
+    },
+    [addOperatorMessage, requestAgentRun],
+  );
 
   const endRef = useRef<HTMLDivElement | null>(null);
 

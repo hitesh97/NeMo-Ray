@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { probeVoice, transcribe } from "@/lib/api/voice";
+import { probeVoice, synthesize, transcribe } from "@/lib/api/voice";
 import { useNemoStore } from "@/store";
 
 /** Pick a MediaRecorder mime type the current browser actually supports. */
@@ -82,6 +82,8 @@ export function useVoice(): UseVoice {
   // ── playback refs ──
   const playQueue = useRef<string[]>([]);
   const playing = useRef(false);
+  const activeAudio = useRef<HTMLAudioElement | null>(null);
+  const activeAudioUrl = useRef<string | null>(null);
 
   // ── VAD refs ──
   const vadStateRef         = useRef<VadState>("idle");
@@ -126,10 +128,9 @@ export function useVoice(): UseVoice {
     recorderRef.current = null;
   }, [stopMeter]);
 
-  // ── TTS playback queue (Web Speech API — no server round-trip needed) ──
+  // ── TTS playback queue (ElevenLabs → MP3 → HTMLAudioElement) ──
   const drainQueue = useCallback(async () => {
     if (playing.current) return;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     playing.current = true;
     setVoiceSpeaking(true);
 
@@ -137,13 +138,36 @@ export function useVoice(): UseVoice {
       for (;;) {
         const next = playQueue.current.shift();
         if (next === undefined) break;
+        if (!playing.current) break; // stopSpeaking() called mid-loop
 
-        await new Promise<void>((resolve) => {
-          const utt = new SpeechSynthesisUtterance(next);
-          utt.onend = () => resolve();
-          utt.onerror = () => resolve();
-          window.speechSynthesis.speak(utt);
-        });
+        let blob: Blob | null = null;
+        try {
+          blob = await synthesize(next);
+        } catch (err) {
+          console.warn("[tts] ElevenLabs unavailable, falling back to browser TTS:", err);
+        }
+        if (!playing.current) break;
+
+        if (blob) {
+          const url = URL.createObjectURL(blob);
+          activeAudioUrl.current = url;
+          await new Promise<void>((resolve) => {
+            const audio = new Audio(url);
+            activeAudio.current = audio;
+            audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+            audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+            audio.play().catch(() => { URL.revokeObjectURL(url); resolve(); });
+          });
+          activeAudio.current = null;
+          activeAudioUrl.current = null;
+        } else if (typeof window !== "undefined" && "speechSynthesis" in window) {
+          await new Promise<void>((resolve) => {
+            const utt = new SpeechSynthesisUtterance(next);
+            utt.onend = () => resolve();
+            utt.onerror = () => resolve();
+            window.speechSynthesis.speak(utt);
+          });
+        }
       }
     } finally {
       playing.current = false;
@@ -153,7 +177,6 @@ export function useVoice(): UseVoice {
 
   const speak = useCallback(
     async (text: string) => {
-      if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
       const trimmed = text.trim();
       if (trimmed.length === 0) return;
       playQueue.current.push(trimmed);
@@ -164,10 +187,15 @@ export function useVoice(): UseVoice {
 
   const stopSpeaking = useCallback(() => {
     playQueue.current = [];
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-    }
     playing.current = false;
+    if (activeAudio.current) {
+      activeAudio.current.pause();
+      activeAudio.current = null;
+    }
+    if (activeAudioUrl.current) {
+      URL.revokeObjectURL(activeAudioUrl.current);
+      activeAudioUrl.current = null;
+    }
     setVoiceSpeaking(false);
   }, [setVoiceSpeaking]);
 
@@ -397,12 +425,9 @@ export function useVoice(): UseVoice {
   useEffect(() => {
     return () => {
       cancelRecording();
-      playQueue.current = [];
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-      }
+      stopSpeaking();
     };
-  }, [cancelRecording]);
+  }, [cancelRecording, stopSpeaking]);
 
   return {
     available,

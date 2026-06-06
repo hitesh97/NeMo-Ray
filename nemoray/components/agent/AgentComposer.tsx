@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useState, type FormEvent, type KeyboardEvent } from "react";
 import { CornerDownLeft, Loader2, Mic, Volume2, VolumeX } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/primitives";
-import { useStreamingAgent } from "@/hooks/useStreamingAgent";
 import { useAutoSpeakLatest, useVoice } from "@/hooks/useVoice";
 import { useNemoStore } from "@/store";
 
@@ -18,13 +17,20 @@ import { useNemoStore } from "@/store";
 export function AgentComposer({ className }: { className?: string }) {
   const [value, setValue] = useState("");
   const [autoSpeak, setAutoSpeak] = useState(false);
-  const [ttsAvailable, setTtsAvailable] = useState(false);
   const streaming = useNemoStore((s) => s.streaming);
+  const addOperatorMessage = useNemoStore((s) => s.addOperatorMessage);
+  const requestAgentRun = useNemoStore((s) => s.requestAgentRun);
 
-  useEffect(() => {
-    setTtsAvailable(typeof window !== "undefined" && "speechSynthesis" in window);
-  }, []);
-  const { sendPrompt } = useStreamingAgent();
+  const sendPrompt = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      addOperatorMessage(trimmed);
+      requestAgentRun({ prompt: trimmed });
+    },
+    [addOperatorMessage, requestAgentRun],
+  );
+
   const {
     available,
     recording,
@@ -124,7 +130,7 @@ export function AgentComposer({ className }: { className?: string }) {
           )}
         />
 
-        {ttsAvailable && (
+        {available && (
           <button
             type="button"
             aria-label={autoSpeak ? "Mute agent replies" : "Speak agent replies"}
