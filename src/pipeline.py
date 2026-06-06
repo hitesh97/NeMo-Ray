@@ -193,7 +193,8 @@ def run(args):
 def main():
     ap = argparse.ArgumentParser(description="Greater-London 4G coverage twin")
     ap.add_argument("--subset", choices=["central", "central3x3", "canarywharf",
-                                         "battersea", "city_canary"],
+                                         "battersea", "city_canary",
+                                         "westminster_canary"],
                     help="named subset of tiles (default: full Greater London)")
     ap.add_argument("--limit", type=int, help="cap number of tiles")
     ap.add_argument("--cell-size", type=float, help="radio-map cell size (m)")

@@ -20,7 +20,8 @@ radio:
   max_depth: 5             # ray interactions (reflections + diffraction)
   cell_size_m: 25.0        # radio-map ground cell resolution
   samples_per_tx: 1000000  # ray samples per transmitter in the radio-map solver
-  ray_total_cap: 500000    # safety ceiling on ray polylines drawn across all masts
+  ray_total_cap: 1000000   # safety ceiling on ray polylines drawn across all masts
+                           # (25-tile westminster_canary at ring=13 traces ~550k+)
 
 # Tiling of the area into manageable Sionna scenes
 tiling:
@@ -68,6 +69,9 @@ subsets:
   battersea:      { center: [51.4791, -0.1487], tiles: 1 }
   # 8 km square spanning the City of London (~-0.089) and Canary Wharf (~-0.020).
   city_canary:    { center: [51.5094, -0.0540], tiles: 4 }
+  # 10 km square from Euston/Kings Cross (NW) and Westminster across the City and
+  # London Bridge/Southwark out to Canary Wharf and Greenwich (SE).
+  westminster_canary: { center: [51.504, -0.067], tiles: 5 }
 
 # The tile used for ray-path visualisation in the viewer (center lat/lng)
 focus_tile: [51.5074, -0.1278]

@@ -112,7 +112,7 @@ const LOOP_LENGTH = 1800;
 const ANIMATION_SPEED = 1.2;
 const TRAIL_LENGTH = 180;
 const RAY_DURATION = 130;
-const MAX_TRIPS = 140000; // cap rays for a clean, smooth field
+const MAX_TRIPS = 700000; // cap rays for a clean, smooth field (above the 25-tile ring=13 ~550-600k output so every ray renders, step stays 1)
 
 // ---- Signal-strength model (pseudo-RSS from path length + bounces) --------
 const REF_DBM = 58; // reference mast EIRP

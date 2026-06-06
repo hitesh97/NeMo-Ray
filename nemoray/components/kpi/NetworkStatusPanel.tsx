@@ -49,7 +49,7 @@ export function NetworkStatusPanel({ className }: { className?: string }) {
           </span>
         }
       />
-      <PanelBody className="flex flex-col gap-3 overflow-y-visible p-3">
+      <PanelBody className="flex flex-col gap-3 overflow-y-auto p-3">
         {/* Headline — total cell towers monitored */}
         <div className="flex flex-col gap-1">
           <span className="nm-eyebrow text-ink-faint">Cell Towers</span>
