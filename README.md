@@ -1,7 +1,8 @@
 # EE 4G Coverage & Resilience Digital Twin — Phase 1
 
 Physically-based **radio propagation (ray tracing)** for the EE 4G network across
-**Greater London**, with an interactive **3D view** rendered as an untextured OSM city model.
+**Greater London**, with an interactive **3D view** built on deck.gl (animated trip-style ray
+traces over extruded OSM buildings).
 
 Phase 1 delivers:
 
@@ -39,9 +40,9 @@ OSM 3D buildings (Geofabrik)┘                                                 
   mosaic is seamless. Each tile is a Mitsuba scene with ITU radio materials; `RadioMapSolver`
   computes best-server RSS at 25 m resolution with reflections + diffraction (`src/rt.py`).
 - **Coordinates**: reprojected to WGS84 only for the final web export (`src/export.py`).
-- **3D view**: the buildings within the simulated area are exported to `out/buildings.geojson`
-  and rendered in CesiumJS as batched extruded polygons — a plain, untextured city model
-  (no photorealistic tiles). The coverage heatmap is draped on the ground plane.
+- **3D view**: a self-contained **deck.gl** app (`viewer/`). Buildings (`out/buildings.geojson`)
+  are extruded with a `GeoJsonLayer`; the ray traces (`out/paths.geojson`) animate as pulses with
+  a `TripsLayer`, coloured by signal strength (orange = strong, blue = weak).
 
 ## Requirements
 
@@ -90,9 +91,11 @@ Outputs land in `out/`: `coverage.png`, `coverage_bounds.json`, `buildings.geojs
 
 ## Viewing in 3D
 
-The viewer renders the OSM buildings as an untextured 3D model with CesiumJS — no external
-tile service or API key required. Serve it with the small built-in server (this also exposes
-the `POST /api/optimize` endpoint that the in-viewer **Optimise** button calls):
+The viewer is a **deck.gl** app styled after deck.gl's [`trips`](https://github.com/visgl/deck.gl/tree/9.3-release/examples/website/trips)
+example — fully local, no map service or API key. The ray traces animate as flowing pulses
+(deck.gl `TripsLayer`) over extruded OSM buildings (`GeoJsonLayer`), under the trips theme's
+lighting. Serve it with the small built-in server (which also exposes the `POST /api/optimize`
+endpoint behind the **Optimise** button):
 
 ```bash
 # Serve from the project root so /out and /viewer resolve:
@@ -100,11 +103,11 @@ python -m src.serve
 # then open:  http://localhost:8000/viewer/
 ```
 
-Toggle layers from the panel: **OSM buildings**, **coverage heatmap**, **EE masts**
-(orange = Orange, pink = T-Mobile), **low-coverage holes** (red), and **ray paths** — **all**
-traced rays (line-of-sight + every reflection/diffraction found) out of **every computed
-mast**, coloured by operator and rendered as a batched `PolylineCollection`. An optional URL
-hash frames a custom camera: `#cam=<lng>,<lat>,<alt>,<pitchDeg>,<headingDeg>`.
+Signal strength is shown **directly in the traces** — orange = strong, blue = weak (a
+pseudo-RSS from path length + bounce count), so there's no separate coverage heatmap. Toggle
+layers from the dashboard: **OSM buildings**, **EE masts**, **coverage holes**, **ray traces**,
+and **proposed masts (cuOpt)**. The dashboard also shows the network KPIs, the cuOpt
+before/after optimisation result, and GPU/latency telemetry.
 
 > Rendering *all* rays is heavy: a `central3x3` run produces ~230k polylines (~60 MB
 > `paths.geojson`). It loads fine on a GPU but takes a few seconds and a fair bit of memory.
