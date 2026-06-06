@@ -75,6 +75,7 @@ python -m src.pipeline --subset central
 python -m src.pipeline --subset central3x3
 
 # Other named subsets:
+python -m src.pipeline --subset city_canary   # 8 km square: City of London + Canary Wharf
 python -m src.pipeline --subset canarywharf
 python -m src.pipeline --subset battersea
 
@@ -160,12 +161,30 @@ python -m src.verify        # (the Optimise button runs optimise + verify togeth
 It reconstructs the simulated tiles, re-runs Sionna RT **only for the tiles a new mast
 affects** (with the proposed masts added as transmitters), re-mosaics + re-exports the
 coverage and hotspots, recomputes the rays for those tiles (the new masts' rays →
-`out/new_rays.geojson`), and checks every former outdoor hole is now served. Result on
-central London: **8 new masts → 100% of outdoor holes verified served by RT** (`out/
-verification.json`). This physics-in-the-loop step is exactly what caught the naive distance
-proxy over-promising (it had only ~33% real coverage). The viewer's **Optimise** button runs
+`out/new_rays.geojson`), and checks every former outdoor hole is now served. Result on the
+**City of London + Canary Wharf** square (`--subset city_canary`): **49 new masts → 100% of
+the 53 outdoor holes verified served by RT** (`out/verification.json`). This physics-in-the-loop
+step is exactly what caught the naive distance proxy over-promising (it had only ~33% real
+coverage); the fix was a line-of-sight-aware coverage model + a tight `near_radius`. The viewer's **Optimise** button runs
 the whole optimise→re-simulate→verify loop and updates the coverage, holes, gold masts, their
 rays, and an **RT verification** panel live.
+
+## Scaling to all of Greater London
+
+`python -m src.pipeline --resume` runs the whole **721-tile** Greater London grid (~9 min on
+the GB10, resumable). The coverage science scales cleanly; two things to know:
+
+- **Viewer artifacts don't scale to the whole city.** Full GL exports ~1.1M buildings
+  (`buildings.geojson`) and ~500k rays (`paths.geojson`) — too heavy for a browser. For a
+  GL-wide view, toggle **OSM buildings** and **Ray paths** off and keep the coverage heatmap +
+  masts + hotspots; use a `--subset` for the immersive 3D buildings/rays.
+- **Optimisation is a regional tool.** GL has tens of thousands of holes. `src/optimize.py`
+  uses a compact dominating-set MILP (candidates = hole locations, sparse KD-tree coverage) and
+  is capped by `cuopt.max_holes` (largest gaps first) so the hosted solver stays happy. RT
+  verification is capped by `cuopt.max_verify_tiles`. For a fast, fully-verified demo, run the
+  pipeline + Optimise button on a **subset** (e.g. `central3x3`); on a GL-wide run the optimiser
+  still works on the worst holes, but RT-verifying masts scattered across all London is a batch
+  operation, not a click.
 
 ## Configuration
 

@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 
@@ -111,6 +112,13 @@ def run(args):
         tiles = tiles[:args.limit]
     print(f"  {len(tiles)} tiles to simulate")
 
+    # Manifest of this run's tiles, so verify/optimise operate on exactly this region
+    # (not whatever else is left in the per-tile cache).
+    os.makedirs(cfg["paths"]["out_dir"], exist_ok=True)
+    with open(os.path.join(cfg["paths"]["out_dir"], "tiles.json"), "w") as f:
+        json.dump([{"key": t.key, "ix": t.ix, "iy": t.iy,
+                    "e0": t.e0, "n0": t.n0, "size": t.size} for t in tiles], f)
+
     # GPU telemetry runs across the whole heavy compute section.
     monitor = GpuMonitor().start()
     tile_latencies = []     # per-tile radio-map solve latency (ms), fresh solves only
@@ -185,7 +193,7 @@ def run(args):
 def main():
     ap = argparse.ArgumentParser(description="Greater-London 4G coverage twin")
     ap.add_argument("--subset", choices=["central", "central3x3", "canarywharf",
-                                         "battersea"],
+                                         "battersea", "city_canary"],
                     help="named subset of tiles (default: full Greater London)")
     ap.add_argument("--limit", type=int, help="cap number of tiles")
     ap.add_argument("--cell-size", type=float, help="radio-map cell size (m)")

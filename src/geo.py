@@ -36,7 +36,9 @@ class Tile:
 
     @property
     def key(self) -> str:
-        return f"tile_{self.ix}_{self.iy}"
+        # Location-based key so different subsets/grids never collide in the tile cache
+        # (a 2 km tile centre is unique to ~1 m).
+        return f"tile_{int(round(self.e0))}_{int(round(self.n0))}"
 
     def bounds_en(self, margin: float = 0.0):
         """(e_min, n_min, e_max, n_max) of the tile, optionally grown by `margin`."""

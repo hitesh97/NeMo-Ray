@@ -1,0 +1,38 @@
+{
+  "sites_total": 2955,
+  "buildings": 65099,
+  "simulated_cells": 102400,
+  "served_pct": 99.6171875,
+  "low_coverage_polys": 72,
+  "ray_paths": 233028,
+  "masts_emitting_rays": 419,
+  "coverage_bounds": {
+    "west": -0.1130892982824797,
+    "south": 51.472421796750375,
+    "east": 0.005274389363997378,
+    "north": 51.54628785746208
+  },
+  "performance": {
+    "device": "NVIDIA GB10",
+    "backend": "cuda_ad_mono_polarized",
+    "peak_gpu_util_pct": 96,
+    "mean_gpu_util_pct": 41.1,
+    "peak_gpu_mem_mib": 997,
+    "samples": 246,
+    "coverage_solve": {
+      "tiles_solved": 16,
+      "transmitters": 2021,
+      "mean_ms": 282.4,
+      "p50_ms": 197.4,
+      "max_ms": 863.7
+    },
+    "radio_map_cells": 102400,
+    "ray_trace": {
+      "count": 233028,
+      "total_s": 40.5,
+      "rays_per_s": 5758
+    },
+    "mosaic_s": 0.0,
+    "wall_time_s": 66.2
+  }
+}

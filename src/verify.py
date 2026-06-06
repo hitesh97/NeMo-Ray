@@ -41,18 +41,17 @@ def _load_new_masts(cfg) -> list[Site]:
 
 
 def _reconstruct_tiles(cfg) -> list[tuple[Tile, str]]:
-    """Rebuild Tile objects + their cache paths from data/tiles/*/result.npz."""
+    """Rebuild this run's Tile objects + cache paths from the pipeline's tile manifest
+    (out/tiles.json), so verify is scoped to exactly the simulated region."""
+    with open(os.path.join(cfg["paths"]["out_dir"], "tiles.json")) as f:
+        manifest = json.load(f)
     tiles = []
-    for cache in sorted(glob.glob(os.path.join(cfg["paths"]["data_dir"], "tiles",
-                                               "tile_*", "result.npz"))):
-        key = os.path.basename(os.path.dirname(cache))
-        _, ix, iy = key.split("_")
-        m = np.load(cache)["meta"]
-        e_left, n_bottom, cell, cols = float(m[0]), float(m[1]), float(m[2]), int(m[4])
-        size = cols * cell
-        tile = Tile(int(ix), int(iy),
-                    float(e_left + size / 2), float(n_bottom + size / 2), float(size))
-        tiles.append((tile, cache))
+    for m in manifest:
+        tile = Tile(int(m["ix"]), int(m["iy"]),
+                    float(m["e0"]), float(m["n0"]), float(m["size"]))
+        cache = os.path.join(cfg["paths"]["data_dir"], "tiles", tile.key, "result.npz")
+        if os.path.exists(cache):
+            tiles.append((tile, cache))
     return tiles
 
 
@@ -80,8 +79,8 @@ def _original_holes(cfg) -> list[tuple[float, float]]:
 
 def verify(cfg) -> dict:
     thr = cfg["coverage"]["served_threshold_dbm"]
-    tx_radius = cfg["tiling"]["tile_size_m"] / 2 + cfg["tiling"]["tx_radius_m"]
     half = cfg["tiling"]["tile_size_m"] / 2
+    max_tiles = int(cfg["cuopt"].get("max_verify_tiles", 60))
 
     new_masts = _load_new_masts(cfg)
     if not new_masts:
@@ -93,22 +92,30 @@ def verify(cfg) -> dict:
     all_sites = existing + new_masts
     buildings = load_buildings(cfg)
     tiles = _reconstruct_tiles(cfg)
-    print(f"  {len(new_masts)} new masts, {len(tiles)} simulated tiles, "
-          f"{len(holes_en)} former holes")
 
-    # Re-solve only the tiles a new mast actually illuminates.
+    # Affected = tiles whose CORE contains a new mast (each proposed mast sits on a hole, so
+    # re-solving that tile verifies the hole). Bounded by the number of distinct mast tiles,
+    # and capped to keep a Greater-London-wide run tractable.
+    affected_keys = []
+    for tile, cache in tiles:
+        if any(abs(s.e - tile.e0) <= half and abs(s.n - tile.n0) <= half for s in new_masts):
+            affected_keys.append(tile.key)
+    capped = len(affected_keys) > max_tiles
+    affected_set = set(affected_keys[:max_tiles])
+    print(f"  {len(new_masts)} new masts, {len(tiles)} tiles, {len(holes_en)} former holes; "
+          f"re-simulating {len(affected_set)} mast tiles"
+          + (f" (capped from {len(affected_keys)})" if capped else ""))
+
+    # Re-solve the affected tiles; keep cached results for the rest.
     results, affected, new_ray_dicts = [], [], []
     for tile, cache in tiles:
-        near_new = [s for s in new_masts
-                    if (s.e - tile.e0) ** 2 + (s.n - tile.n0) ** 2 <= tx_radius ** 2]
-        if not near_new:
+        if tile.key not in affected_set:
             results.append(_load_cached(cache, tile.key))
             continue
         affected.append(tile.key)
         xml, _ = build_tile_scene(cfg, tile, buildings)
         res = RT.solve_tile(cfg, tile, xml, all_sites)        # existing + new transmitters
         results.append(res)
-        # Recompute rays for this affected tile: trace the new masts inside its core.
         core_new = [s for s in new_masts
                     if abs(s.e - tile.e0) <= half and abs(s.n - tile.n0) <= half]
         if core_new:

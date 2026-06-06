@@ -44,12 +44,18 @@ coverage:
 cuopt:
   api_key: "***REMOVED-CUOPT-KEY***"
   url: "https://optimize.api.nvidia.com/v1/nvidia/cuopt"
-  near_radius_m: 70.0            # a mast this close serves a weak point even without LOS
+  near_radius_m: 50.0            # a mast this close serves a weak point even without LOS
+                                 # (kept tight so shared masts are line-of-sight-safe,
+                                 #  pushing RT-verified coverage toward 100%)
   coverage_radius_m: 280.0       # at medium range a new mast needs clear line-of-sight
   candidate_spacing_m: 90.0      # grid spacing of candidate new-mast sites
   new_mast_height_m: 25.0        # assumed antenna height of a proposed mast
   new_mast_power_dbm: 58.0       # assumed EIRP of a proposed macro mast
   time_limit_s: 20               # cuOpt solver time limit
+  max_holes: 1200                # cap on holes optimised at once (largest gaps first);
+                                 # optimisation is a regional tool — keeps the MILP and the
+                                 # RT verification tractable on a Greater-London-wide run
+  max_verify_tiles: 60           # cap on tiles re-simulated during RT verification
 
 # Named subsets for quick iteration (center lat/lng + tiles per side)
 subsets:
@@ -57,6 +63,8 @@ subsets:
   central3x3:     { center: [51.5074, -0.1278], tiles: 3 }
   canarywharf:    { center: [51.5054, -0.0235], tiles: 1 }
   battersea:      { center: [51.4791, -0.1487], tiles: 1 }
+  # 8 km square spanning the City of London (~-0.089) and Canary Wharf (~-0.020).
+  city_canary:    { center: [51.5094, -0.0540], tiles: 4 }
 
 # The tile used for ray-path visualisation in the viewer (center lat/lng)
 focus_tile: [51.5074, -0.1278]

@@ -1,0 +1,20 @@
+<scene version="2.1.0">
+  <bsdf type="itu-radio-material" id="mat-building">
+    <string name="type" value="concrete"/>
+    <float name="thickness" value="0.3"/>
+  </bsdf>
+  <bsdf type="itu-radio-material" id="mat-ground">
+    <string name="type" value="medium_dry_ground"/>
+    <float name="thickness" value="0.1"/>
+  </bsdf>
+  <shape type="ply" id="mesh-buildings">
+    <string name="filename" value="meshes/buildings.ply"/>
+    <boolean name="face_normals" value="true"/>
+    <ref id="mat-building" name="bsdf"/>
+  </shape>
+  <shape type="ply" id="mesh-terrain">
+    <string name="filename" value="meshes/ground.ply"/>
+    <boolean name="face_normals" value="true"/>
+    <ref id="mat-ground" name="bsdf"/>
+  </shape>
+</scene>

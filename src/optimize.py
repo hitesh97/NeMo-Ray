@@ -43,42 +43,55 @@ def _load_demands(cfg) -> tuple[np.ndarray, list[float]]:
     return np.array(pts, dtype=float).reshape(-1, 2), areas
 
 
-def _candidate_grid(dem: np.ndarray, spacing: float, radius: float, tree, geoms) -> np.ndarray:
-    """Grid of candidate sites (EPSG:27700) within `radius` of a demand and NOT sitting
-    inside a building footprint."""
-    e_min, n_min = dem.min(axis=0) - radius
-    e_max, n_max = dem.max(axis=0) + radius
-    es = np.arange(e_min, e_max + spacing, spacing)
-    ns = np.arange(n_min, n_max + spacing, spacing)
-    grid = np.array([[e, n] for n in ns for e in es], dtype=float)
-    d2 = ((grid[:, None, :] - dem[None, :, :]) ** 2).sum(-1)
-    near = d2.min(axis=1) <= radius * radius
-    grid = grid[near]
-    # Drop candidates that fall inside a building.
-    from shapely.geometry import Point
-    keep = []
-    for e, n in grid:
-        hit = tree.query(Point(e, n), predicate="intersects")
-        keep.append(len(hit) == 0)
-    return grid[np.array(keep, dtype=bool)] if len(grid) else grid
+def _inside_building(pts: np.ndarray, btree) -> np.ndarray:
+    """Boolean mask: which points (EPSG:27700) fall inside a building footprint.
+    Vectorised STRtree query — scales to tens of thousands of points."""
+    import shapely
+    if len(pts) == 0:
+        return np.zeros(0, dtype=bool)
+    geoms = shapely.points(pts[:, 0], pts[:, 1])
+    hit = btree.query(geoms, predicate="intersects")  # (2, K): [point_idx, tree_idx]
+    mask = np.zeros(len(pts), dtype=bool)
+    if hit.size:
+        mask[np.unique(hit[0])] = True
+    return mask
 
 
-def _los_coverage(cand: np.ndarray, dem: np.ndarray, near: float, far: float,
-                  tree) -> np.ndarray:
-    """covers[j, i] = candidate j serves demand i. A mast covers a weak spot if it is
-    very close (within `near` — short-range multipath fills the shadow) OR within `far`
-    with a clear line of sight (no building footprint between them)."""
+def _candidates_near(dem: np.ndarray, spacing: float, radius: float, btree) -> np.ndarray:
+    """Candidate sites on a global lattice, generated LOCALLY around each demand (so the
+    count scales with the number of holes, not the bounding-box area), deduplicated, and
+    with in-building points removed. Includes each hole's own cell (a co-located mast)."""
+    rc = int(round(radius / spacing))
+    cells = set()
+    for e, n in dem:
+        ci, cj = round(e / spacing), round(n / spacing)
+        for di in range(-rc, rc + 1):
+            for dj in range(-rc, rc + 1):
+                if di * di + dj * dj <= rc * rc:
+                    cells.add((ci + di, cj + dj))
+    cand = np.array([[i * spacing, j * spacing] for i, j in cells], dtype=float)
+    return cand[~_inside_building(cand, btree)] if len(cand) else cand
+
+
+def _coverage_rows(cand: np.ndarray, dem: np.ndarray, near: float, far: float, btree):
+    """Sparse coverage: for each demand, the list of candidate indices that serve it.
+    Served = within `near` (short-range multipath) OR within `far` with clear line of
+    sight. Uses a KD-tree so it scales to large problems."""
+    from scipy.spatial import cKDTree
     from shapely.geometry import LineString
-    near2, far2 = near * near, far * far
-    covers = np.zeros((len(cand), len(dem)), dtype=bool)
-    for j, (ce, cn) in enumerate(cand):
-        d2 = ((dem - [ce, cn]) ** 2).sum(axis=1)
-        covers[j, d2 <= near2] = True
-        for i in np.nonzero((d2 > near2) & (d2 <= far2))[0]:
-            seg = LineString([(ce, cn), (dem[i, 0], dem[i, 1])])
-            if len(tree.query(seg, predicate="intersects")) == 0:
-                covers[j, i] = True
-    return covers
+    near2 = near * near
+    ctree = cKDTree(cand)
+    rows = [[] for _ in range(len(dem))]
+    for i, (de, dn) in enumerate(dem):
+        for j in ctree.query_ball_point((de, dn), far):
+            d2 = (cand[j, 0] - de) ** 2 + (cand[j, 1] - dn) ** 2
+            if d2 <= near2:
+                rows[i].append(j)
+            else:
+                seg = LineString([(cand[j, 0], cand[j, 1]), (de, dn)])
+                if len(btree.query(seg, predicate="intersects")) == 0:
+                    rows[i].append(j)
+    return rows
 
 
 def optimize(cfg) -> dict:
@@ -86,48 +99,49 @@ def optimize(cfg) -> dict:
     spacing = float(cfg["cuopt"]["candidate_spacing_m"])
     height = float(cfg["cuopt"]["new_mast_height_m"])
 
+    near = float(cfg["cuopt"]["near_radius_m"])
+    max_holes = int(cfg["cuopt"].get("max_holes", 1200))
+
     dem, areas = _load_demands(cfg)
     if len(dem) == 0:
         print("No coverage holes to optimise — nothing to do.")
         _write_empty(cfg)
-        return {"selected": 0, "demands": 0}
+        return {"new_masts": 0, "coverage_holes": 0}
 
-    # Building footprints near the weak areas, for line-of-sight tests.
+    # Building footprints for line-of-sight + outdoor tests.
     from shapely.strtree import STRtree
     buildings = load_buildings(cfg)
     pad = radius + 50.0
     e0, n0 = dem.min(axis=0) - pad
     e1, n1 = dem.max(axis=0) + pad
-    bsub = buildings.cx[e0:e1, n0:n1]
-    geoms = list(bsub.geometry.values)
-    tree = STRtree(geoms)
+    tree = STRtree(list(buildings.cx[e0:e1, n0:n1].geometry.values))
 
-    # Keep only OUTDOOR holes — a low-coverage cell whose centroid sits inside a building
-    # footprint is a radio-map artifact (no one needs outdoor service inside a building).
-    from shapely.geometry import Point
-    outdoor = np.array([len(tree.query(Point(e, n), predicate="intersects")) == 0
-                        for (e, n) in dem])
-    n_indoor = int((~outdoor).sum())
-    dem = dem[outdoor]
-    print(f"  {len(dem)} outdoor weak spots ({n_indoor} indoor artifacts dropped), "
-          f"{len(geoms)} buildings in play")
-    if len(dem) == 0:
+    # Keep only OUTDOOR holes (centroid not inside a building); indoor cells are artifacts.
+    areas = np.asarray(areas, dtype=float)
+    outdoor = ~_inside_building(dem, tree)
+    dem, areas = dem[outdoor], areas[outdoor]
+    n_total_outdoor = len(dem)
+    if n_total_outdoor == 0:
         print("No outdoor coverage holes — nothing to optimise.")
         _write_empty(cfg)
         return {"new_masts": 0, "coverage_holes": 0}
 
-    near = float(cfg["cuopt"]["near_radius_m"])
-    cand = _candidate_grid(dem, spacing, radius, tree, geoms)
-    # Also allow a mast right at each weak spot (if that point isn't inside a building),
-    # so even deep, enclosed holes are coverable by a co-located mast.
-    from shapely.geometry import Point
-    at_hole = np.array([[e, n] for (e, n) in dem
-                        if len(tree.query(Point(e, n), predicate="intersects")) == 0])
-    if len(at_hole):
-        cand = np.vstack([cand, at_hole]) if len(cand) else at_hole
-    # Coverage = close-range (multipath) OR line-of-sight at medium range.
-    covers = _los_coverage(cand, dem, near, radius, tree)
-    coverable = covers.any(axis=0)
+    # Optimisation is a regional tool — cap to the largest gaps so the MILP (and the RT
+    # verification that follows) stays tractable on a Greater-London-wide run.
+    capped = False
+    if n_total_outdoor > max_holes:
+        keep = np.argsort(areas)[::-1][:max_holes]
+        dem, areas = dem[keep], areas[keep]
+        capped = True
+    print(f"  {len(dem)} outdoor weak spots optimised"
+          + (f" (largest of {n_total_outdoor}; cap {max_holes})" if capped else ""))
+
+    # Candidate sites = the weak-spot locations themselves: placing a mast at one hole
+    # covers it and its near/LOS neighbours. This dominating-set formulation keeps the
+    # MILP at <= max_holes binary variables, small enough for the hosted cuOpt solver.
+    cand = dem.copy()
+    rows = _coverage_rows(cand, dem, near, radius, tree)
+    coverable = np.array([len(r) > 0 for r in rows])
     n_uncoverable = int((~coverable).sum())
     print(f"  {len(cand)} candidate sites, "
           f"{int(coverable.sum())}/{len(dem)} holes are coverable")
@@ -136,12 +150,11 @@ def optimize(cfg) -> dict:
     #   Σ_{j covers i} y_j >= 1
     n_cand = len(cand)
     offsets, indices, values = [0], [], []
-    for i in range(len(dem)):
-        if not coverable[i]:
+    for i, r in enumerate(rows):
+        if not r:
             continue
-        js = np.nonzero(covers[:, i])[0]
-        indices.extend(int(j) for j in js)
-        values.extend(1.0 for _ in js)
+        indices.extend(int(j) for j in r)
+        values.extend(1.0 for _ in r)
         offsets.append(len(indices))
     n_constraints = len(offsets) - 1
 
@@ -169,18 +182,24 @@ def optimize(cfg) -> dict:
     print(f"  cuOpt: {sol['status']}, {len(chosen)} new masts "
           f"(solve {sol['solve_time']:.2f}s)")
 
-    # Assemble the proposed new masts + coverage stats.
+    # Invert the sparse coverage to count what each chosen mast serves.
+    chosen_set = set(chosen)
+    serves = {j: [] for j in chosen}
+    for i, r in enumerate(rows):
+        for j in r:
+            if j in chosen_set:
+                serves[j].append(i)
+
     feats = []
     covered_demands = set()
     for j in chosen:
-        served = np.nonzero(covers[j] & coverable)[0]
-        covered_demands.update(int(i) for i in served)
+        covered_demands.update(serves[j])
         lng, lat = en_to_lnglat(cand[j, 0], cand[j, 1])
         feats.append({
             "type": "Feature",
             "geometry": {"type": "Point", "coordinates": [float(lng), float(lat)]},
             "properties": {"id": f"new-{j}", "height_m": height,
-                           "covers_holes": int(served.size),
+                           "covers_holes": len(serves[j]),
                            "radius_m": radius},
         })
     out = cfg["paths"]["out_dir"]
