@@ -114,8 +114,9 @@ behaviour and APIs. Build new UI by composing these, not raw `<div>`s:
 | `Tooltip`, `TooltipProvider` | Radix tooltip (provider mounts at the shell root). |
 | `Dialog` | Soft-rounded modal (Radix). |
 
-Live, executable references for these are the Storybook stories in `stories/` — read those
-for real usage rather than guessing props.
+For real usage of these primitives, read the existing consumers under `components/` (e.g.
+`components/panels/`, `components/agent/`) rather than guessing props. (Storybook and the
+`stories/` directory were removed.)
 
 Styling utility: **`lib/cn.ts`** (`cn()` = clsx + tailwind-merge) — always merge classes
 through it. Note `.nm-*` classes are opaque to tailwind-merge (passed through untouched).
@@ -157,8 +158,7 @@ panels need. Persisted state follows the localStorage hydrate/persist pattern in
 - **ESLint token rule** (`eslint.config.mjs`) — bans raw HUD hex literals in the DOM HUD
   chrome (`components/{shell,panels,primitives,kpi,agent,scenario,layers,optimiser}`). Keep
   hex in the token CSS files (`app/styles/`), never inline in chrome `.tsx`. The rule
-  deliberately **excludes** `components/cesium/**` and the deck/map GL layers, which use
-  raw hex for WebGL materials. If lint flags you, use a token (`text-nv`, `bg-panel`,
-  `var(--nv-green)`) or a `.nm-*` class.
-- **Storybook** — primitive + layer stories in `stories/` are drift-proof design references.
+  deliberately **excludes** the map/GL layer dirs (`lib/deck/**`, `lib/maplibre/**`; the old
+  `cesium` globs remain but now match nothing), which use raw RGB for GL materials. If lint
+  flags you, use a token (`text-nv`, `bg-panel`, `var(--nv-green)`) or a `.nm-*` class.
 - See `docs/INVARIANTS.md` for the architectural locks (StrictMode, map seam, etc.).
