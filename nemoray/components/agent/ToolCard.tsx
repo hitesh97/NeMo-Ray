@@ -1,12 +1,13 @@
 "use client";
 
 import {
-  Activity,
   Check,
   Cpu,
   Network,
+  Radio,
   Satellite,
   ShieldCheck,
+  Truck,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -15,11 +16,12 @@ import { cn } from "@/lib/cn";
 import type { ToolCall, ToolName, ToolStatus } from "@/lib/types";
 
 const ICON: Record<ToolName, LucideIcon> = {
-  diagnose_site: Activity,
-  predict_root_cause: Network,
-  activate_failover: Satellite,
+  run_sionna_coverage: Radio,
   run_cuopt: Cpu,
   validate_site: ShieldCheck,
+  simulate_outage: Network,
+  move_mast: Satellite,
+  deploy_cow: Truck,
 };
 
 const STATUS_TEXT: Record<ToolStatus, string> = {
@@ -38,7 +40,7 @@ const STATUS_COLOR: Record<ToolStatus, string> = {
 
 /** One animated tool-pipeline cell. */
 export function ToolCard({ call }: { call: ToolCall }) {
-  const Icon = ICON[call.name];
+  const Icon = ICON[call.name] ?? Cpu;
   const { status, label, result, progress = 0 } = call;
   const active = status === "running" || status === "success";
 

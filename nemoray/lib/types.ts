@@ -124,12 +124,14 @@ export interface AgentMessage {
   createdAt: number;
 }
 
+// Mirrors the agent's tool registry (modellingsim/.../tools.py TOOL_LABELS).
 export type ToolName =
-  | "diagnose_site"
-  | "predict_root_cause"
-  | "activate_failover"
+  | "run_sionna_coverage"
   | "run_cuopt"
-  | "validate_site";
+  | "validate_site"
+  | "simulate_outage"
+  | "move_mast"
+  | "deploy_cow";
 
 export type ToolStatus = "queued" | "running" | "success" | "error";
 
