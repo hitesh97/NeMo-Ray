@@ -2,22 +2,29 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import * as Cesium from 'cesium';
 import CesiumViewer, { cesiumViewerRef } from './CesiumViewer';
-import PhotorealisticTiles from './PhotorealisticTiles';
 import SitefinderTowerLayer from './SitefinderTowerLayer';
 import EmergencyServices from './EmergencyServices';
 import { useCesiumCamera } from '@/hooks/useCesiumCamera';
 import { useSitefinderSelection } from '@/hooks/useSitefinderSelection';
 import CesiumPostProcess from './CesiumPostProcess';
+import RayTracingLayer, { type RayLayerKey, type RayTracingShow, type RtSummary } from './RayTracingLayer';
 import type { SitefinderPayload, SitefinderTowerSite, TransmissionType } from '@/types/sitefinder';
 
 const TRANSMISSION_FILTERS: TransmissionType[] = ['GSM', 'UMTS', 'TETRA', 'GSM-R', 'LTE', 'UNKNOWN'];
 
+const RT_LAYERS: { key: RayLayerKey; label: string; swatch: string }[] = [
+  { key: 'rays', label: 'Ray paths', swatch: '#21d4fd' },
+  { key: 'coverage', label: 'Coverage', swatch: 'linear-gradient(90deg,#d73027,#fee08b,#1a9850)' },
+  { key: 'holes', label: 'Coverage holes', swatch: '#ff2d2d' },
+  { key: 'proposals', label: 'cuOpt proposals', swatch: '#ffd23f' },
+  { key: 'buildings', label: 'OSM twin', swatch: '#6f7f9a' },
+];
+
 /**
- * Standalone full-viewport Cesium scene for the /map route. Photorealistic city
- * tiles plus the live Sitefinder tower layer (3D antenna/tower GLTF models,
- * selectable, filterable by transmission type and operator). To bring back the
- * mock coverage/mast overlays, re-mount `MastBeams` / `CoverageVolume` /
- * `SignalArcs` inside the `<CesiumViewer>` here.
+ * Standalone full-viewport Cesium scene for the /map route. The untextured OSM
+ * building twin (extruded from the dark globe ground in `RayTracingLayer`) plus
+ * the live Sitefinder tower layer (procedural lattice masts, selectable,
+ * filterable by transmission type and operator).
  */
 export default function CesiumMapWrapper() {
   const { flyToLondon, flyToSite } = useCesiumCamera(cesiumViewerRef as React.MutableRefObject<Cesium.Viewer | null>);
@@ -27,6 +34,17 @@ export default function CesiumMapWrapper() {
     () => new Set(['GSM', 'UMTS', 'TETRA', 'GSM-R', 'LTE'])
   );
   const [operator, setOperator] = useState('all');
+  const [rtShow, setRtShow] = useState<RayTracingShow>({
+    rays: true,
+    coverage: true,
+    holes: true,
+    proposals: true,
+    buildings: true,
+  });
+  const [rtSummary, setRtSummary] = useState<RtSummary | null>(null);
+  const toggleRt = useCallback((key: RayLayerKey) => {
+    setRtShow((current) => ({ ...current, [key]: !current[key] }));
+  }, []);
   const sitefinderSites = useMemo(() => {
     const allSites = sitefinder?.sites ?? [];
     return operator === 'all' ? allSites : allSites.filter((site) => site.operators.includes(operator));
@@ -85,7 +103,6 @@ export default function CesiumMapWrapper() {
         style={{ width: '100%', height: '100%' }}
         onReady={handleReady}
       >
-        <PhotorealisticTiles />
         <SitefinderTowerLayer
           sites={sitefinderSites}
           activeTypes={activeTypes}
@@ -93,6 +110,7 @@ export default function CesiumMapWrapper() {
           onSelectSite={handleSelectSite}
         />
         <EmergencyServices />
+        <RayTracingLayer show={rtShow} onSummary={setRtSummary} />
         <CesiumPostProcess />
       </CesiumViewer>
       <div
@@ -168,6 +186,78 @@ export default function CesiumMapWrapper() {
               ))}
             </select>
           </div>
+        </div>
+
+        <div
+          style={{
+            border: '1px solid rgba(148, 211, 255, 0.22)',
+            background: 'rgba(3, 10, 24, 0.82)',
+            backdropFilter: 'blur(10px)',
+            borderRadius: 8,
+            padding: 10,
+            boxShadow: '0 12px 40px rgba(0, 0, 0, 0.25)',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+            <strong style={{ fontSize: 13 }}>Ray Tracing</strong>
+            <span style={{ color: '#8fb4c8' }}>Sionna RT</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 8 }}>
+            {RT_LAYERS.map((layer) => (
+              <label
+                key={layer.key}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12 }}
+              >
+                <input type="checkbox" checked={rtShow[layer.key]} onChange={() => toggleRt(layer.key)} />
+                <span style={{ flex: 1 }}>{layer.label}</span>
+                <span
+                  style={{
+                    width: 18,
+                    height: 10,
+                    borderRadius: 2,
+                    background: layer.swatch,
+                    border: '1px solid rgba(255, 255, 255, 0.18)',
+                  }}
+                />
+              </label>
+            ))}
+          </div>
+          {rtSummary ? (
+            <dl
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'auto 1fr',
+                rowGap: 4,
+                columnGap: 8,
+                margin: 0,
+                paddingTop: 8,
+                borderTop: '1px solid rgba(148, 211, 255, 0.14)',
+              }}
+            >
+              <dt style={{ color: '#7f9daf' }}>Served</dt>
+              <dd style={{ margin: 0, textAlign: 'right' }}>
+                {rtSummary.served_pct != null ? `${rtSummary.served_pct.toFixed(1)}%` : '—'}
+              </dd>
+              <dt style={{ color: '#7f9daf' }}>Holes</dt>
+              <dd style={{ margin: 0, textAlign: 'right' }}>{rtSummary.low_coverage_polys ?? '—'}</dd>
+              <dt style={{ color: '#7f9daf' }}>Rays</dt>
+              <dd style={{ margin: 0, textAlign: 'right' }}>
+                {rtSummary.ray_paths != null ? rtSummary.ray_paths.toLocaleString() : '—'}
+              </dd>
+              {rtSummary.performance?.device && (
+                <>
+                  <dt style={{ color: '#7f9daf' }}>Device</dt>
+                  <dd style={{ margin: 0, textAlign: 'right', color: '#9ad7b0' }}>
+                    {rtSummary.performance.device}
+                  </dd>
+                </>
+              )}
+            </dl>
+          ) : (
+            <div style={{ color: '#7f9daf', fontSize: 11, paddingTop: 6 }}>
+              Waiting for pipeline output…
+            </div>
+          )}
         </div>
 
         {selectedSite && (

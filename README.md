@@ -150,17 +150,31 @@ python -m src.pipeline --resume --limit 50   # cap tiles for a partial run
 ```
 
 Useful flags: `--cell-size <m>`, `--max-depth <n>`, `--resume`, `--limit <n>`.
-Outputs land in `out/`: `coverage.png`, `coverage_bounds.json`, `buildings.geojson`,
-`masts.geojson`, `hotspots.geojson`, `paths.geojson`, `summary.json`.
+Outputs land in **`nemoray/public/raytracing/`** (set by `paths.out_dir` in `config.yaml`):
+`coverage.png`, `coverage_bounds.json`, `buildings.geojson`, `masts.geojson`,
+`hotspots.geojson`, `paths.geojson`, `summary.json` (plus `new_masts.geojson`,
+`new_rays.geojson`, `optimization.json`, `verification.json` after an optimise run).
 
-### Viewing in 3D
+### Viewing in the dashboard (primary)
+
+The pipeline publishes straight into the Next.js dashboard's static dir, which Next serves
+at `/raytracing/*`. The dashboard's `RayTracingLayer` (`nemoray/components/cesium/`) polls
+`summary.json` and renders the extruded OSM building twin, rays, coverage heatmap,
+low-coverage holes and cuOpt proposals live on the dark untextured globe ground (the
+twin's z = 0 frame, so everything aligns exactly) — so a fresh `python -m
+src.pipeline` run shows up in the dashboard with no copy step and no reload. Toggle the
+layers from the **Ray Tracing** panel on the `/map` route. (Masts come from the live
+Sitefinder layer, so the RT mast layer is intentionally omitted.) The directory is
+gitignored — re-run the pipeline to regenerate it.
+
+### Viewing in the standalone viewer
 
 The viewer renders the OSM buildings as an untextured 3D model with CesiumJS — no external
 tile service or API key required. Serve it with the small built-in server (this also exposes
 the `POST /api/optimize` endpoint that the in-viewer **Optimise** button calls):
 
 ```bash
-# Serve from the project root so /out and /viewer resolve:
+# Serve from the project root so /viewer and /nemoray/public/raytracing resolve:
 python -m src.serve
 # then open:  http://localhost:8000/viewer/
 ```

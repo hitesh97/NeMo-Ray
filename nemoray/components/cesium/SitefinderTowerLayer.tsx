@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Cesium from 'cesium';
 import { useCesiumViewer } from './CesiumContext';
 import type { SitefinderTowerSite, TransmissionType } from '@/types/sitefinder';
-import { getSitePrimaryColor, getSiteVisualHeight } from '@/lib/cesium/sitefinderVisuals';
+import { getSitePrimaryColor, getSiteAntennaHeight } from '@/lib/cesium/sitefinderVisuals';
 
 interface SitefinderTowerLayerProps {
   sites: SitefinderTowerSite[];
@@ -27,13 +27,10 @@ const DETAIL_DISTANCE_MULTIPLIER = 2.4;
 const MAX_DETAILED_SITES = 60;
 const CAMERA_UPDATE_MS = 220;
 
-// London ground sits ~tens of metres above the WGS84 ellipsoid (geoid undulation
-// ≈ +46 m). Anchoring at 0 — or at any fixed value below the real tile surface —
-// drops the tower base metres underground, so we sample the actual surface and
-// only use this provisional height until that resolves.
-const LONDON_GROUND_FALLBACK_M = 46;
-const TERRAIN_RESAMPLE_MS = 600;
-const MAX_TERRAIN_RESAMPLES = 8;
+// The world model is the untextured globe whose surface IS the OSM twin's z = 0
+// street-level frame (the buildings extrude from 0). So tower bases plant at a
+// constant ground height of 0 — no tile-surface sampling, no streaming-height lag.
+const GROUND_HEIGHT_M = 0;
 
 const SELECTED_OUTLINE = Cesium.Color.fromCssColorString('#ffe34d').withAlpha(1);
 const ACTIVE_OUTLINE = Cesium.Color.fromCssColorString('#ff9c33').withAlpha(0.96);
@@ -96,19 +93,19 @@ function getPickedSiteId(picked: SitefinderPickedFeature | undefined): string | 
   return undefined;
 }
 
-// Ellipsoid height of the antenna tip — where the spire ends in buildLatticeTower
-// — so the capping dot sits exactly on top of the tower.
+// Ellipsoid height of the antenna tip — the spire in buildLatticeTower tops out
+// at exactly the antenna height, which is the same z the pipeline traces rays
+// from, so the capping dot sits on both the tower tip and the ray origin.
 function getTowerTopHeight(site: SitefinderTowerSite, groundHeight: number): number {
-  const height = Math.max(14, getSiteVisualHeight(site));
-  return groundHeight + height + Math.max(3, height * 0.14);
+  return groundHeight + getSiteAntennaHeight(site);
 }
 
 /**
  * Build a 3D red lattice tower as world-space polylines, standing along the
  * local surface normal (ENU up) like a building. A tapered square lattice — four
- * legs with horizontal rungs and X-bracing — plus a spire. Base sits on the
- * sampled tile surface (`groundHeight`); the height comes from the CSV antenna
- * height. Every segment carries the site id so picks resolve.
+ * legs with horizontal rungs and X-bracing — plus a spire. Base sits on the globe
+ * ground (`groundHeight`, the z = 0 OSM frame); the height comes from the CSV
+ * antenna height. Every segment carries the site id so picks resolve.
  */
 function buildLatticeTower(
   site: SitefinderTowerSite,
@@ -116,8 +113,12 @@ function buildLatticeTower(
   isSelected: boolean,
   collection: Cesium.PolylineCollection
 ): void {
-  const height = Math.max(14, getSiteVisualHeight(site)); // metres
-  const baseHalf = Cesium.Math.clamp(height * 0.09, 3, 9); // slender, like a real mast
+  // The antenna height is exactly the z the pipeline traces rays from; the whole
+  // tower (lattice + spire) tops out there so the tip lands on the ray origin.
+  const height = getSiteAntennaHeight(site); // metres
+  const spireLen = height * 0.12;            // spire is INSIDE the height, not added on top
+  const headH = height - spireLen;           // top of the lattice; spire runs headH → height
+  const baseHalf = Cesium.Math.clamp(height * 0.09, 1.5, 9); // slender, like a real mast
   const topHalf = baseHalf * 0.32;
   // Fresh material per segment — see makeGlowMaterial's note on per-polyline ownership.
   const width = isSelected ? 3.6 : 2.2;
@@ -135,7 +136,7 @@ function buildLatticeTower(
   const corner = (i: number, t: number): Cesium.Cartesian3 => {
     const [sx, sy] = signs[i];
     const half = baseHalf + (topHalf - baseHalf) * t;
-    return toWorld(sx * half, sy * half, height * t);
+    return toWorld(sx * half, sy * half, headH * t);
   };
 
   // Legs
@@ -144,7 +145,7 @@ function buildLatticeTower(
   }
 
   // Rungs (closed square loops) + X-bracing on each face between levels.
-  const levels = Math.max(3, Math.round(height / 12));
+  const levels = Math.max(3, Math.round(headH / 12));
   for (let l = 0; l <= levels; l++) {
     const t = l / levels;
     const ring = [corner(0, t), corner(1, t), corner(2, t), corner(3, t)];
@@ -158,57 +159,14 @@ function buildLatticeTower(
     }
   }
 
-  // Spire above the lattice head.
+  // Spire from the lattice head up to the antenna height (the ray origin), where
+  // the capping dot sits — so the tower tip never overshoots where the rays start.
   collection.add({
-    positions: [toWorld(0, 0, height), toWorld(0, 0, height + Math.max(3, height * 0.14))],
+    positions: [toWorld(0, 0, headH), toWorld(0, 0, height)],
     width,
     material: makeGlowMaterial(isSelected),
     id,
   });
-}
-
-// Resolve the photorealistic-tile surface height under each site. Returns ONLY
-// the heights that resolved — sites whose tiles hadn't streamed in yet are
-// omitted (not set to 0/fallback) so the caller re-samples rather than caching a
-// bad value that buries the tower base underground.
-async function sampleSiteHeights(
-  viewer: Cesium.Viewer,
-  sites: SitefinderTowerSite[],
-  exclude: object[]
-): Promise<Map<string, number>> {
-  const result = new Map<string, number>();
-  if (sites.length === 0) return result;
-
-  const isValid = (h: number | undefined): h is number =>
-    typeof h === 'number' && Number.isFinite(h) && Math.abs(h) > 1e-3;
-
-  try {
-    // clampToHeightMostDetailed is the 3D-Tiles-aware API — it streams in the
-    // most detailed tiles at each point first, reading the real city surface.
-    if (viewer.scene.clampToHeightSupported) {
-      const positions = sites.map((s) => Cesium.Cartesian3.fromDegrees(s.lng, s.lat, 0));
-      const clamped = await viewer.scene.clampToHeightMostDetailed(positions, exclude);
-      sites.forEach((s, i) => {
-        const c = clamped[i];
-        if (!Cesium.defined(c)) return;
-        const h = Cesium.Cartographic.fromCartesian(c).height;
-        if (isValid(h)) result.set(s.id, h);
-      });
-      return result;
-    }
-
-    if (viewer.scene.sampleHeightSupported) {
-      const carts = sites.map((s) => Cesium.Cartographic.fromDegrees(s.lng, s.lat));
-      const sampled = await viewer.scene.sampleHeightMostDetailed(carts, exclude);
-      sites.forEach((s, i) => {
-        const h = sampled[i]?.height;
-        if (isValid(h)) result.set(s.id, h);
-      });
-    }
-  } catch {
-    // Leave unresolved sites out — the caller retries on the next pass.
-  }
-  return result;
 }
 
 // Detach a primitive collection from the scene, tolerant of it having already
@@ -249,11 +207,7 @@ export default function SitefinderTowerLayer({
   const handlerRef = useRef<Cesium.ScreenSpaceEventHandler | null>(null);
   const siteLookupRef = useRef(new Map<string, SitefinderTowerSite>());
   const visibleSitesRef = useRef<SitefinderTowerSite[]>([]);
-  // Cache of resolved tile-surface heights — only valid heights are stored.
-  const terrainCacheRef = useRef(new Map<string, number>());
   const [detailedSiteIds, setDetailedSiteIds] = useState<string[]>([]);
-  const [terrainVersion, setTerrainVersion] = useState(0);
-  const resampleAttemptsRef = useRef(0);
 
   const visibleSites = useMemo(
     () => sites.filter((site) => siteMatchesTypes(site, activeTypes)),
@@ -328,7 +282,7 @@ export default function SitefinderTowerLayer({
 
     detailedSites.forEach((site) => {
       const sel = selectedSiteId === site.id;
-      const groundHeight = terrainCacheRef.current.get(site.id) ?? LONDON_GROUND_FALLBACK_M;
+      const groundHeight = GROUND_HEIGHT_M;
       pts.add({
         id: { layer: 'sitefinder', siteId: site.id } satisfies SitefinderPickId,
         position: Cesium.Cartesian3.fromDegrees(site.lng, site.lat, getTowerTopHeight(site, groundHeight)),
@@ -345,7 +299,7 @@ export default function SitefinderTowerLayer({
       detachPrimitive(viewer, pointCollectionRef.current);
       pointCollectionRef.current = null;
     };
-  }, [selectedSiteId, viewer, detailedSiteIds, terrainVersion]);
+  }, [selectedSiteId, viewer, detailedSiteIds]);
 
   // 3D lattice towers for the nearest sites — swap pattern: build the new
   // collection, add it, then remove the old one, so there's no empty frame.
@@ -363,61 +317,19 @@ export default function SitefinderTowerLayer({
       return;
     }
 
-    let active = true;
-    let resampleTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const build = (cache: Map<string, number>) => {
-      if (!active || viewer.isDestroyed()) return;
-      const next = new Cesium.PolylineCollection();
-      detailedSites.forEach((site) => {
-        const groundHeight = cache.get(site.id) ?? LONDON_GROUND_FALLBACK_M;
-        buildLatticeTower(site, groundHeight, selectedSiteId === site.id, next);
-      });
-      // The viewer can be torn down while building (async path awaits above);
-      // bail and free the half-built collection rather than parent it to a dead scene.
-      if (!active || viewer.isDestroyed()) {
-        next.destroy();
-        return;
-      }
-      viewer.scene.primitives.add(next);
-      const prev = towerCollectionRef.current;
-      towerCollectionRef.current = next;
-      detachPrimitive(viewer, prev);
-    };
-
-    const uncached = detailedSites.filter((s) => !terrainCacheRef.current.has(s.id));
-
-    if (uncached.length === 0) {
-      resampleAttemptsRef.current = 0;
-      build(terrainCacheRef.current);
-    } else {
-      (async () => {
-        const exclude = towerCollectionRef.current ? [towerCollectionRef.current] : [];
-        const newHeights = await sampleSiteHeights(viewer, uncached, exclude);
-        if (!active) return;
-        newHeights.forEach((h, id) => terrainCacheRef.current.set(id, h));
-        build(terrainCacheRef.current);
-
-        // Snap any stragglers (tiles not streamed in yet) once they resolve,
-        // capped so a permanently-unresolvable site can't poll forever.
-        if (newHeights.size > 0) {
-          resampleAttemptsRef.current = 0;
-          setTerrainVersion((v) => v + 1);
-        }
-        if (newHeights.size < uncached.length && resampleAttemptsRef.current < MAX_TERRAIN_RESAMPLES) {
-          resampleAttemptsRef.current += 1;
-          resampleTimer = setTimeout(() => {
-            if (active) setTerrainVersion((v) => v + 1);
-          }, TERRAIN_RESAMPLE_MS);
-        }
-      })();
-    }
-
-    return () => {
-      active = false;
-      if (resampleTimer) clearTimeout(resampleTimer);
-    };
-  }, [detailedSiteIds, selectedSiteId, viewer, terrainVersion]);
+    // Towers plant on the globe ground (z = 0), so building is synchronous — no
+    // tile-surface sampling and no resample polling. Build the new collection,
+    // add it, then remove the old one, so there's no empty frame.
+    if (viewer.isDestroyed()) return;
+    const next = new Cesium.PolylineCollection();
+    detailedSites.forEach((site) => {
+      buildLatticeTower(site, GROUND_HEIGHT_M, selectedSiteId === site.id, next);
+    });
+    viewer.scene.primitives.add(next);
+    const prev = towerCollectionRef.current;
+    towerCollectionRef.current = next;
+    detachPrimitive(viewer, prev);
+  }, [detailedSiteIds, selectedSiteId, viewer]);
 
   // Click-to-select — picks the dot or any tower segment (all carry the site id)
   useEffect(() => {

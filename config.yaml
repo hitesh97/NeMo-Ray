@@ -73,6 +73,11 @@ focus_tile: [51.5074, -0.1278]
 paths:
   csv: SITEFINDER_MAY_2012.csv
   data_dir: data
-  out_dir: out
+  # The pipeline publishes its web artifacts (coverage.png, paths/hotspots/new_*
+  # GeoJSON, summary.json) straight into the Next.js dashboard's static dir, which
+  # Next serves at /raytracing/*. The RayTracingLayer polls these and renders them
+  # live, so a fresh `python -m src.pipeline` run shows up in the dashboard without
+  # any copy step. (Gitignored — see nemoray/.gitignore.)
+  out_dir: nemoray/public/raytracing
   pbf: data/greater-london-latest.osm.pbf
   buildings_cache: data/buildings.pkl

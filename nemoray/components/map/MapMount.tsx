@@ -32,7 +32,7 @@ const MAP_IMPL = process.env.NEXT_PUBLIC_MAP_IMPL ?? "placeholder";
 
 const MapSurface: ComponentType<MapSurfaceProps> = dynamic(
   async () => {
-    // CesiumJS 3D scene (Google Photorealistic Tiles) — the live demo map.
+    // CesiumJS 3D scene (untextured OSM building twin + Sionna RT) — the live demo map.
     if (MAP_IMPL === "cesium") {
       const mod = await import("./CesiumScene");
       return { default: mod.CesiumScene };

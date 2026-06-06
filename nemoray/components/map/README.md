@@ -42,13 +42,13 @@ NEXT_PUBLIC_MAP_IMPL=cesium        # the live CesiumJS 3D scene
 ```
 
 Flipping that env var is the **only** switch. `placeholder` is a dependency-free
-canvas mock (fast dev/CI, no Cesium load, no Google Tiles API calls); `cesium`
-is the real demo surface.
+canvas mock (fast dev/CI, no Cesium load); `cesium` is the real demo surface.
 
 ## The live surface: `components/map/CesiumScene.tsx`
 
 `CesiumScene` implements `MapSurfaceProps` 1:1 and composes the CesiumJS stack
-(`CesiumViewer` + `PhotorealisticTiles` + `CesiumPostProcess`). Like every
+(`CesiumViewer` + the untextured OSM building twin via `RayTracingLayer` +
+`CesiumPostProcess`). Like every
 surface it reads **NOTHING** from the store — props only. The DOM overlays in
 this folder render on top so the HUD stays consistent: `MapOverlayHUD`
 (selected-site callout + status chip) and `CoverageLegend`

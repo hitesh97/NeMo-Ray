@@ -28,7 +28,20 @@ export function applyNightScene(viewer: Cesium.Viewer): void {
   if (scene.moon) scene.moon.show = false;
   if (scene.skyAtmosphere) scene.skyAtmosphere.show = false;
   if (scene.skyBox) scene.skyBox.show = false;
-  if (scene.globe) scene.globe.show = false;
+
+  // The globe is the world model now (the OSM building twin extrudes from its
+  // z = 0 surface, and the Sionna coverage heatmap drapes onto it). Keep it
+  // untextured and dark so the city + rays read against a neutral ground —
+  // matching the standalone OSM twin (viewer/app.js).
+  if (scene.globe) {
+    scene.globe.show = true;
+    scene.globe.baseColor = Cesium.Color.fromCssColorString('#11151c');
+    scene.globe.showGroundAtmosphere = false;
+    scene.globe.enableLighting = false;
+    // No terrain: the twin is a flat z = 0 frame, so overlays clamp to a flat
+    // ellipsoid ground with no streaming-height lag.
+    scene.globe.depthTestAgainstTerrain = false;
+  }
 
   scene.fog.enabled = true;
   scene.fog.density = 0.00002;

@@ -27,15 +27,16 @@ describe('Sitefinder parser', () => {
     expect(site?.maxAntennaHeightMeters).toBe(21);
   });
 
-  test('corrects OSGB36 coordinates to WGS84 (datum shift applied)', () => {
+  test('passes the CSV coordinates through unchanged (matches the ray-tracing frame)', () => {
     const payload = parseSitefinderCsv(CSV);
     const site = payload.sites.find((item) => item.opref === 'ATN0051');
 
-    // Raw CSV is OSGB36 (51.46557, -0.095904); output must be the WGS84-shifted
-    // position (~124 m WNW), not the raw value.
-    expect(site?.lat).toBeCloseTo(51.46608, 4);
-    expect(site?.lng).toBeCloseTo(-0.09751, 4);
-    expect(site?.lat).not.toBeCloseTo(51.46557, 4);
+    // The CSV lat/lng are OSGB36, but the Sionna pipeline traces rays from those
+    // same raw coords without the datum shift, so the antenna layer keeps them as-is
+    // (no ~124 m WNW correction) to stay aligned with the rays. See
+    // correctSitefinderLatLng in lib/geo/datasetCoordinates.ts.
+    expect(site?.lat).toBeCloseTo(51.46557, 4);
+    expect(site?.lng).toBeCloseTo(-0.095904, 4);
   });
 
   test('handles blank power fields and unknown transmission types', () => {

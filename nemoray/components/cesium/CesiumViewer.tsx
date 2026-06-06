@@ -46,7 +46,13 @@ export default function CesiumViewer({ children, className, style, onReady }: Ce
       timeline: false,
       navigationHelpButton: false,
       navigationInstructionsInitiallyVisible: false,
-      globe: false,
+      // Globe ON as a neutral, untextured ground surface: it is the z = 0 datum the
+      // OSM building twin + Sionna RT output are rendered on, replacing the old
+      // Google Photorealistic 3D Tiles world. We OMIT the `globe` option (rather
+      // than pass `true`, which Cesium mis-handles as a Globe instance and crashes
+      // in updateGlobeListeners) so Cesium constructs a default Globe; it's then
+      // styled dark in applyNightScene(). `baseLayer: false` keeps it untextured.
+      baseLayer: false,
       orderIndependentTranslucency: false,
     } as const;
 
@@ -117,6 +123,10 @@ export default function CesiumViewer({ children, className, style, onReady }: Ce
         // so the cinematic plays without two flights racing.
         viewer.camera.setView(GLOBE_CAMERA);
         cesiumViewerRef.current = viewer;
+        // Dev-only debug handle for the browser console / automated scene checks.
+        if (process.env.NODE_ENV !== 'production') {
+          (window as unknown as { __cesiumViewer?: Cesium.Viewer }).__cesiumViewer = viewer;
+        }
         setReadyViewer(viewer);
         onReady?.(viewer);
       }

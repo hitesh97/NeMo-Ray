@@ -1,9 +1,9 @@
 import { create } from "zustand";
 
-import { getRadioMap } from "@/lib/api/coverage";
+import { delay } from "@/lib/api/client";
 import type { AgentRequest } from "@/lib/api/agent";
 import { DEFAULT_LAYERS } from "@/lib/layers";
-import { computeMockRadioMap } from "@/lib/mock/radioMap";
+import { computeDeadZones } from "@/lib/mock/deadZones";
 import { MOCK_PROPOSALS } from "@/lib/mock/proposals";
 import { DEFAULT_SCENARIO, MOCK_SCENARIOS } from "@/lib/mock/scenarios";
 import { MOCK_SITES, MOCK_SITES_BY_ID } from "@/lib/mock/sites";
@@ -13,13 +13,13 @@ import type {
   CameraCommand,
   CameraCommandType,
   CoverageStatus,
+  DeadZone,
   EventMarker,
   LayerId,
   LayerState,
   LeftRailTab,
   Proposal,
   ProposalStatus,
-  RadioMap,
   RightRailTab,
   Scenario,
   ScenarioId,

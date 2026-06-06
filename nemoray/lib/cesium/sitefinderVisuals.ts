@@ -37,9 +37,17 @@ export function getTransmissionColor(type: TransmissionType, frequencyBand = '',
   return Cesium.Color.fromCssColorString(getTransmissionColorCss(type, frequencyBand)).withAlpha(alpha);
 }
 
-export function clampMastHeight(heightMeters: number | null): number {
-  if (heightMeters === null || !Number.isFinite(heightMeters)) return 36;
-  return Math.max(16, Math.min(120, heightMeters));
+// The exact height (metres) the Sionna pipeline traces each mast's rays from:
+// `s.height_m` in src/rt.py:123 / src/masts.py — the max `Antennaht` across the
+// site's antennas, defaulting to 15 m when the CSV omits it, with NO clamping.
+// The rendered tower and its capping dot must use this same value so the antenna
+// tip sits exactly on the ray origin. (The old `clampMastHeight` floored to 16 m
+// and a spire was added on top, floating the dot above where the rays start.)
+const PIPELINE_DEFAULT_ANTENNA_HEIGHT_M = 15;
+
+export function getSiteAntennaHeight(site: SitefinderTowerSite): number {
+  const h = site.maxAntennaHeightMeters;
+  return h !== null && Number.isFinite(h) ? h : PIPELINE_DEFAULT_ANTENNA_HEIGHT_M;
 }
 
 export function calculateFootprintRadiusMeters(powerDbw: number | null): number {
@@ -52,6 +60,3 @@ export function getSitePrimaryColor(site: SitefinderTowerSite, alpha = 1): Cesiu
   return getTransmissionColor(site.transmissionTypes[0] ?? 'UNKNOWN', site.frequencyBands[0] ?? '', alpha);
 }
 
-export function getSiteVisualHeight(site: SitefinderTowerSite): number {
-  return clampMastHeight(site.maxAntennaHeightMeters);
-}

@@ -116,9 +116,10 @@ export function parseSitefinderCsv(csv: string): SitefinderPayload {
     const rawLng = parseNumber(row.Sitelng);
     if (rawLat === null || rawLng === null) return;
 
-    // Sitefinder lat/lng are OSGB36 (the source pipeline omitted the datum
-    // shift) — correct to WGS84 so masts align with the photorealistic tiles
-    // instead of landing ~124 m off (e.g. in the Thames).
+    // Sitefinder lat/lng are OSGB36, but the corrector is identity here on
+    // purpose: the Sionna pipeline traces rays from these same raw coords without
+    // the datum shift, so the antennas must stay in that uncorrected frame to sit
+    // on the rays. (See correctSitefinderLatLng in lib/geo/datasetCoordinates.ts.)
     const { lat, lng } = correctSitefinderLatLng(rawLat, rawLng);
 
     const siteKey = makeSiteKey(row, lat, lng);

@@ -5,22 +5,34 @@ import { useCallback, useEffect, useRef } from "react";
 
 import CesiumViewer from "@/components/cesium/CesiumViewer";
 import CesiumPostProcess from "@/components/cesium/CesiumPostProcess";
-import PhotorealisticTiles from "@/components/cesium/PhotorealisticTiles";
 import SitefinderTowers from "@/components/cesium/SitefinderTowers";
 import EmergencyServices from "@/components/cesium/EmergencyServices";
+import RayTracingLayer, { type RayTracingShow } from "@/components/cesium/RayTracingLayer";
+import WaterLayer from "@/components/cesium/WaterLayer";
 import { CesiumCameraController } from "@/lib/cesium/camera/CesiumCameraController";
 import type { SitefinderTowerSite } from "@/types/sitefinder";
 import type { MapSurfaceProps } from "@/lib/types";
+
+// All RT layers on by default in Mission Control. Module-level constant so its
+// identity is stable (avoids re-firing RayTracingLayer's show effect each render).
+const RT_ALL_ON: RayTracingShow = {
+  rays: true,
+  coverage: true,
+  holes: true,
+  proposals: true,
+  buildings: true,
+};
 
 /**
  * CesiumJS 3D scene dropped into the Mission Control map seam. Implements
  * {@link MapSurfaceProps} so it slots behind `MapMount` where `MapPlaceholder`
  * used to sit, filling its parent cell so the HUD rails/timeline reflow around it.
  *
- * Renders the Google Photorealistic city plus the live Sitefinder antenna/tower
- * layer. Owns one `CesiumCameraController` built when the viewer is ready (no
- * polling), runs the single animated intro flight, and honours `cameraCommand`
- * intents dispatched from HUD chrome.
+ * Renders the untextured OSM building twin (the geometry Sionna RT was computed
+ * on, extruded from the dark globe ground in `RayTracingLayer`) plus the live
+ * Sitefinder antenna/tower layer. Owns one `CesiumCameraController` built when the
+ * viewer is ready (no polling), runs the single animated intro flight, and honours
+ * `cameraCommand` intents dispatched from HUD chrome.
  */
 export function CesiumScene({ cameraCommand }: MapSurfaceProps) {
   const controllerRef = useRef<CesiumCameraController | null>(null);
@@ -71,9 +83,10 @@ export function CesiumScene({ cameraCommand }: MapSurfaceProps) {
         style={{ width: "100%", height: "100%" }}
         onReady={handleReady}
       >
-        <PhotorealisticTiles />
         <SitefinderTowers onSelectSite={handleSelectSite} />
         <EmergencyServices />
+        <WaterLayer />
+        <RayTracingLayer show={RT_ALL_ON} />
         <CesiumPostProcess />
       </CesiumViewer>
     </div>
