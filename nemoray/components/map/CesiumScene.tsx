@@ -7,6 +7,7 @@ import CesiumViewer from "@/components/cesium/CesiumViewer";
 import CesiumPostProcess from "@/components/cesium/CesiumPostProcess";
 import PhotorealisticTiles from "@/components/cesium/PhotorealisticTiles";
 import SitefinderTowers from "@/components/cesium/SitefinderTowers";
+import EmergencyServices from "@/components/cesium/EmergencyServices";
 import { CesiumCameraController } from "@/lib/cesium/camera/CesiumCameraController";
 import type { SitefinderTowerSite } from "@/types/sitefinder";
 import type { MapSurfaceProps } from "@/lib/types";
@@ -72,6 +73,7 @@ export function CesiumScene({ cameraCommand }: MapSurfaceProps) {
       >
         <PhotorealisticTiles />
         <SitefinderTowers onSelectSite={handleSelectSite} />
+        <EmergencyServices />
         <CesiumPostProcess />
       </CesiumViewer>
     </div>

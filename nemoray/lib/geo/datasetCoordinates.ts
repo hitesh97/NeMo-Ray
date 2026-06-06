@@ -21,7 +21,7 @@
  * `identityLatLng`. A consistent ~124 m WNW offset ⇒ OSGB36, use `osgb36ToWgs84`.
  * Raw eastings/northings ⇒ `ngrToEastingNorthing` then a grid→WGS84 conversion.
  */
-import { osgb36ToWgs84, type LatLng } from './osgb';
+import { osgb36ToWgs84, osNationalGridToWgs84, type LatLng } from './osgb';
 
 export type LatLngCorrector = (lat: number, lng: number) => LatLng;
 
@@ -33,3 +33,17 @@ export const correctSitefinderLatLng: LatLngCorrector = (lat, lng) => osgb36ToWg
 
 /** MOPAC police-station closures: verified WGS84 → no correction. */
 export const correctPoliceLatLng: LatLngCorrector = identityLatLng;
+
+/**
+ * NHS hospital locations: published as plain WGS84 decimal degrees (OSM-derived),
+ * no systematic ~124 m offset → identity.
+ */
+export const correctHospitalLatLng: LatLngCorrector = identityLatLng;
+
+/**
+ * London Fire Brigade assets: published as OS National Grid eastings/northings
+ * (EPSG:27700), not lat/lng. The loader converts the grid metres straight to
+ * WGS84 with this helper rather than going through a `LatLngCorrector`.
+ */
+export const correctFireEastingNorthing = (easting: number, northing: number): LatLng =>
+  osNationalGridToWgs84(easting, northing);

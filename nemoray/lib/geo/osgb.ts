@@ -81,6 +81,76 @@ export function osgb36ToWgs84(latDeg: number, lngDeg: number, heightM = 0): LatL
 }
 
 /**
+ * Convert OS National Grid eastings/northings (EPSG:27700, metres) to WGS84
+ * lat/lng (degrees). Inverse Transverse Mercator on the Airy 1830 ellipsoid
+ * gives OSGB36 geodetic coordinates, which then go through the Helmert datum
+ * shift (`osgb36ToWgs84`) — skip that second step and features land ~124 m off,
+ * the classic National-Grid bug. Algorithm: OS "A Guide to Coordinate Systems in
+ * Great Britain", section C.2.
+ */
+export function osNationalGridToWgs84(easting: number, northing: number): LatLng {
+  const F0 = 0.9996012717; // central-meridian scale factor
+  const lat0 = 49 * DEG; // true origin latitude
+  const lng0 = -2 * DEG; // true origin longitude
+  const N0 = -100000; // northing of true origin
+  const E0 = 400000; // easting of true origin
+  const e2 = 1 - (AIRY_B * AIRY_B) / (AIRY_A * AIRY_A);
+  const n = (AIRY_A - AIRY_B) / (AIRY_A + AIRY_B);
+  const n2 = n * n;
+  const n3 = n * n * n;
+
+  // Iterate latitude until the meridional arc M matches (northing - N0).
+  let lat = lat0;
+  let M = 0;
+  do {
+    lat = (northing - N0 - M) / (AIRY_A * F0) + lat;
+    const dLat = lat - lat0;
+    const sLat = lat + lat0;
+    M =
+      AIRY_B *
+      F0 *
+      ((1 + n + (5 / 4) * n2 + (5 / 4) * n3) * dLat -
+        (3 * n + 3 * n2 + (21 / 8) * n3) * Math.sin(dLat) * Math.cos(sLat) +
+        ((15 / 8) * n2 + (15 / 8) * n3) * Math.sin(2 * dLat) * Math.cos(2 * sLat) -
+        (35 / 24) * n3 * Math.sin(3 * dLat) * Math.cos(3 * sLat));
+  } while (Math.abs(northing - N0 - M) >= 0.00001);
+
+  const sinLat = Math.sin(lat);
+  const cosLat = Math.cos(lat);
+  const tanLat = Math.tan(lat);
+  const tan2 = tanLat * tanLat;
+  const tan4 = tan2 * tan2;
+  const tan6 = tan4 * tan2;
+  const secLat = 1 / cosLat;
+
+  const nu = (AIRY_A * F0) / Math.sqrt(1 - e2 * sinLat * sinLat);
+  const rho = (AIRY_A * F0 * (1 - e2)) / Math.pow(1 - e2 * sinLat * sinLat, 1.5);
+  const eta2 = nu / rho - 1;
+
+  const dE = easting - E0;
+  const dE2 = dE * dE;
+  const dE3 = dE2 * dE;
+  const dE4 = dE2 * dE2;
+  const dE5 = dE4 * dE;
+  const dE6 = dE4 * dE2;
+  const dE7 = dE6 * dE;
+
+  const VII = tanLat / (2 * rho * nu);
+  const VIII = (tanLat / (24 * rho * nu ** 3)) * (5 + 3 * tan2 + eta2 - 9 * tan2 * eta2);
+  const IX = (tanLat / (720 * rho * nu ** 5)) * (61 + 90 * tan2 + 45 * tan4);
+  const X = secLat / nu;
+  const XI = (secLat / (6 * nu ** 3)) * (nu / rho + 2 * tan2);
+  const XII = (secLat / (120 * nu ** 5)) * (5 + 28 * tan2 + 24 * tan4);
+  const XIIA = (secLat / (5040 * nu ** 7)) * (61 + 662 * tan2 + 1320 * tan4 + 720 * tan6);
+
+  const latOsgb = lat - VII * dE2 + VIII * dE4 - IX * dE6;
+  const lngOsgb = lng0 + X * dE - XI * dE3 + XII * dE5 - XIIA * dE7;
+
+  // The above is OSGB36 geodetic (Airy) — apply the datum shift to WGS84.
+  return osgb36ToWgs84(latOsgb / DEG, lngOsgb / DEG);
+}
+
+/**
  * Parse an OS National Grid reference (e.g. `TQ3225075840`) to easting/northing
  * metres (EPSG:27700). Returns null for malformed refs. Supports any even number
  * of digits (2–10) after the two-letter 100 km square.

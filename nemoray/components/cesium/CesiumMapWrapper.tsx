@@ -4,6 +4,7 @@ import * as Cesium from 'cesium';
 import CesiumViewer, { cesiumViewerRef } from './CesiumViewer';
 import PhotorealisticTiles from './PhotorealisticTiles';
 import SitefinderTowerLayer from './SitefinderTowerLayer';
+import EmergencyServices from './EmergencyServices';
 import { useCesiumCamera } from '@/hooks/useCesiumCamera';
 import { useSitefinderSelection } from '@/hooks/useSitefinderSelection';
 import CesiumPostProcess from './CesiumPostProcess';
@@ -91,6 +92,7 @@ export default function CesiumMapWrapper() {
           selectedSiteId={selectedSite?.id ?? null}
           onSelectSite={handleSelectSite}
         />
+        <EmergencyServices />
         <CesiumPostProcess />
       </CesiumViewer>
       <div
