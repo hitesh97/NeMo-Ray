@@ -1,5 +1,5 @@
 import { API_BASE, USE_MOCK } from "@/lib/config";
-import { buildReply, buildSiteDownRun, type ScriptStep } from "@/lib/mock/agent";
+import type { AgentStreamEvent } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -8,17 +8,11 @@ interface AgentBody {
   trigger?: { kind: "site_down"; siteId: string; siteName: string };
 }
 
-function scriptFor(body: AgentBody): ScriptStep[] {
-  if (body.trigger?.kind === "site_down") {
-    return buildSiteDownRun(body.trigger.siteId, body.trigger.siteName);
-  }
-  return buildReply(body.prompt ?? "");
-}
-
 /**
- * Streaming Nemotron endpoint (SSE). Mock mode replays scripted runs from
- * `lib/mock/agent.ts`; real mode proxies the DGX-Spark Nemotron service. The
- * wire protocol (`AgentStreamEvent` frames) is identical either way.
+ * Streaming Nemotron endpoint (SSE). Real mode proxies the DGX-Spark Nemotron
+ * service; the scripted mock runs were removed with the rest of the demo data.
+ * Without a backend the endpoint streams a single notice over the same
+ * `AgentStreamEvent` wire protocol so the console renders cleanly.
  */
 export async function POST(req: Request): Promise<Response> {
   const body = (await req.json().catch(() => ({}))) as AgentBody;
@@ -38,13 +32,23 @@ export async function POST(req: Request): Promise<Response> {
     });
   }
 
-  const steps = scriptFor(body);
+  const id = "sys-no-backend";
+  const notice: AgentStreamEvent[] = [
+    { type: "message_start", id, role: "system" },
+    {
+      type: "token",
+      text:
+        "Nemotron backend not connected. Set NEXT_PUBLIC_USE_MOCK=false and " +
+        "NEXT_PUBLIC_API_BASE to reach the DGX-Spark agent service.",
+    },
+    { type: "message_end", id },
+  ];
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      for (const step of steps) {
-        await new Promise((r) => setTimeout(r, step.delay));
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(step.event)}\n\n`));
+    start(controller) {
+      for (const event of notice) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       }
       controller.close();
     },

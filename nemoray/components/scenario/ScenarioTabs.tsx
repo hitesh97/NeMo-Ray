@@ -15,7 +15,7 @@ import { useState } from "react";
 
 import { Button, Dialog, Tooltip } from "@/components/primitives";
 import { cn } from "@/lib/cn";
-import { MOCK_SCENARIOS, SCENARIO_ORDER } from "@/lib/mock/scenarios";
+import { SCENARIOS, SCENARIO_ORDER } from "@/lib/scenarios";
 import type { ScenarioId } from "@/lib/types";
 import { useNemoStore } from "@/store";
 
@@ -32,7 +32,7 @@ const SCENARIO_ICON: Record<ScenarioId, IconType> = {
 
 /** One bespoke HUD scenario segment (active = nv + corner ticks + inset bar). */
 function ScenarioSegment({ id }: { id: ScenarioId }) {
-  const scenario = MOCK_SCENARIOS[id];
+  const scenario = SCENARIOS[id];
   const active = useNemoStore((s) => s.activeScenarioId === id);
   const setScenario = useNemoStore((s) => s.setScenario);
   const Icon = SCENARIO_ICON[id];
@@ -69,7 +69,7 @@ export function ScenarioTabs({ className }: { className?: string }) {
   const sites = useNemoStore((s) => s.sites);
   const deadZones = useNemoStore((s) => s.deadZones);
   const deactivatedCount = useNemoStore((s) => s.deactivatedSiteIds.length);
-  const active = MOCK_SCENARIOS[activeScenarioId];
+  const active = SCENARIOS[activeScenarioId];
 
   // Real fleet figures for the report summary — no synthetic KPIs.
   const onAir = sites.filter((s) => s.status === "active").length;

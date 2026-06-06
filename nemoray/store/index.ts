@@ -3,10 +3,7 @@ import { create } from "zustand";
 import { delay } from "@/lib/api/client";
 import type { AgentRequest } from "@/lib/api/agent";
 import { DEFAULT_LAYERS } from "@/lib/layers";
-import { computeDeadZones } from "@/lib/mock/deadZones";
-import { MOCK_PROPOSALS } from "@/lib/mock/proposals";
-import { DEFAULT_SCENARIO, MOCK_SCENARIOS } from "@/lib/mock/scenarios";
-import { MOCK_SITES, MOCK_SITES_BY_ID } from "@/lib/mock/sites";
+import { DEFAULT_SCENARIO, SCENARIOS } from "@/lib/scenarios";
 import type {
   AgentMessage,
   AgentStreamEvent,
@@ -29,11 +26,6 @@ import type {
   ToolCall,
   Workspace,
 } from "@/lib/types";
-
-// Synchronous first paint — no await, deterministic.
-const INITIAL_DEAD_ZONES = computeDeadZones(
-  MOCK_SCENARIOS[DEFAULT_SCENARIO].seedDeactivated,
-);
 
 export interface PanelState {
   left: boolean;
@@ -130,39 +122,31 @@ let cameraNonce = 0;
 export const useNemoStore = create<NemoState>((set, get) => ({
   // ── scenario ──
   activeScenarioId: DEFAULT_SCENARIO,
-  scenarios: MOCK_SCENARIOS,
+  scenarios: SCENARIOS,
   setScenario: (id) => {
     const scenario = get().scenarios[id];
-    const seeded = scenario.seedDeactivated;
     set({
       activeScenarioId: id,
-      deactivatedSiteIds: seeded,
+      deactivatedSiteIds: scenario.seedDeactivated,
       selectedSiteId: null,
-      sites: MOCK_SITES.map((s) =>
-        seeded.includes(s.id) ? { ...s, status: "deactivated" } : { ...s, status: "active" },
-      ),
       events: scenario.events,
       durationMs: scenario.durationMs,
       positionMs: scenario.durationMs,
       timelineMode: "live",
       playing: false,
     });
-    void get().recomputeCoverage();
   },
 
   // ── network ──
-  sites: MOCK_SITES.map((s) =>
-    MOCK_SCENARIOS[DEFAULT_SCENARIO].seedDeactivated.includes(s.id)
-      ? { ...s, status: "deactivated" }
-      : s,
-  ),
-  sitesById: MOCK_SITES_BY_ID,
-  deactivatedSiteIds: MOCK_SCENARIOS[DEFAULT_SCENARIO].seedDeactivated,
+  // Empty until wired to a real feed — the demo seed data was removed.
+  sites: [],
+  sitesById: {},
+  deactivatedSiteIds: [],
   selectedSiteId: null,
   hoveredSiteId: null,
-  deadZones: INITIAL_DEAD_ZONES,
-  coverageStatus: "ready",
-  proposals: MOCK_PROPOSALS,
+  deadZones: [],
+  coverageStatus: "idle",
+  proposals: [],
 
   selectSite: (id) => set({ selectedSiteId: id }),
   hoverSite: (id) => set({ hoveredSiteId: id }),
@@ -195,12 +179,12 @@ export const useNemoStore = create<NemoState>((set, get) => ({
       : get().deactivateSite(id),
 
   recomputeCoverage: async () => {
+    // The mock coverage model was removed; coverage now comes from a real feed.
+    // Until that's wired, this just flips the status without deriving dead zones.
     set({ coverageStatus: "computing" });
-    const { deactivatedSiteIds, sites } = get();
     try {
-      // A touch of latency so the "computing…" state is visible on deactivation.
       await delay(280);
-      set({ deadZones: computeDeadZones(deactivatedSiteIds, sites), coverageStatus: "ready" });
+      set({ coverageStatus: "ready" });
     } catch {
       set({ coverageStatus: "error" });
     }
@@ -224,11 +208,11 @@ export const useNemoStore = create<NemoState>((set, get) => ({
 
   // ── timeline ──
   timelineMode: "live",
-  positionMs: MOCK_SCENARIOS[DEFAULT_SCENARIO].durationMs,
-  durationMs: MOCK_SCENARIOS[DEFAULT_SCENARIO].durationMs,
+  positionMs: SCENARIOS[DEFAULT_SCENARIO].durationMs,
+  durationMs: SCENARIOS[DEFAULT_SCENARIO].durationMs,
   playing: false,
   speed: 1,
-  events: MOCK_SCENARIOS[DEFAULT_SCENARIO].events,
+  events: SCENARIOS[DEFAULT_SCENARIO].events,
   play: () => set({ playing: true, timelineMode: "playback" }),
   pause: () => set({ playing: false }),
   seek: (ms) =>
