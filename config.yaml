@@ -1,0 +1,70 @@
+# Phase 1 — Greater-London 4G coverage digital twin configuration
+
+# Greater London bounding box (lat/lng, WGS84). Roughly the M25 envelope.
+bbox:
+  lat_min: 51.28
+  lat_max: 51.70
+  lng_min: -0.52
+  lng_max: 0.33
+
+# Operators that together make up EE (the merger of T-Mobile UK and Orange UK).
+operators:
+  - T-Mobile
+  - Orange
+
+# Radio / propagation parameters
+radio:
+  carrier_hz: 1.8e9        # 1800 MHz — EE's primary 4G band, matches CSV Freqband=1800
+  tx_power_dbm: 46.0       # default per-sector EIRP if CSV power is missing (~40W ERP)
+  rx_height_m: 1.5         # receiver height for the radio map (street-level handset)
+  max_depth: 5             # ray interactions (reflections + diffraction)
+  cell_size_m: 25.0        # radio-map ground cell resolution
+  samples_per_tx: 1000000  # ray samples per transmitter in the radio-map solver
+  ray_total_cap: 500000    # safety ceiling on ray polylines drawn across all masts
+
+# Tiling of the area into manageable Sionna scenes
+tiling:
+  tile_size_m: 2000.0      # square tile edge
+  margin_m: 250.0          # extra geometry pulled in around each tile (edge reflectors)
+  tx_radius_m: 1500.0      # include masts within this of the tile centre as transmitters
+
+# Building extrusion defaults when OSM tags are missing
+buildings:
+  default_height_m: 9.0    # ~3 storeys
+  levels_height_m: 3.0     # metres per building level
+  ground_z_m: 0.0
+
+# Low-coverage detection
+coverage:
+  served_threshold_dbm: -110.0   # below this = effectively no usable service
+  good_threshold_dbm: -85.0      # above this = strong coverage (for colour scale)
+
+# Phase 2 — cuOpt mast-placement optimisation (max coverage, fewest new masts).
+# Uses NVIDIA's hosted cuOpt MILP service (nvapi key).
+cuopt:
+  api_key: "***REMOVED-CUOPT-KEY***"
+  url: "https://optimize.api.nvidia.com/v1/nvidia/cuopt"
+  near_radius_m: 70.0            # a mast this close serves a weak point even without LOS
+  coverage_radius_m: 280.0       # at medium range a new mast needs clear line-of-sight
+  candidate_spacing_m: 90.0      # grid spacing of candidate new-mast sites
+  new_mast_height_m: 25.0        # assumed antenna height of a proposed mast
+  new_mast_power_dbm: 58.0       # assumed EIRP of a proposed macro mast
+  time_limit_s: 20               # cuOpt solver time limit
+
+# Named subsets for quick iteration (center lat/lng + tiles per side)
+subsets:
+  central:        { center: [51.5074, -0.1278], tiles: 1 }   # Trafalgar Sq, single tile
+  central3x3:     { center: [51.5074, -0.1278], tiles: 3 }
+  canarywharf:    { center: [51.5054, -0.0235], tiles: 1 }
+  battersea:      { center: [51.4791, -0.1487], tiles: 1 }
+
+# The tile used for ray-path visualisation in the viewer (center lat/lng)
+focus_tile: [51.5074, -0.1278]
+
+# Paths
+paths:
+  csv: SITEFINDER_MAY_2012.csv
+  data_dir: data
+  out_dir: out
+  pbf: data/greater-london-latest.osm.pbf
+  buildings_cache: data/buildings.pkl
