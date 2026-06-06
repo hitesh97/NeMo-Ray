@@ -26,16 +26,19 @@ describe('Sitefinder parser', () => {
     expect(site?.maxAntennaHeightMeters).toBe(21);
   });
 
-  test('passes the CSV coordinates through unchanged (matches the ray-tracing frame)', () => {
+  test('corrects the OSGB36 CSV coordinates to WGS84 (matches the pipeline frame)', () => {
     const payload = parseSitefinderCsv(CSV);
     const site = payload.sites.find((item) => item.opref === 'ATN0051');
 
-    // The CSV lat/lng are OSGB36, but the Sionna pipeline traces rays from those
-    // same raw coords without the datum shift, so the antenna layer keeps them as-is
-    // (no ~124 m WNW correction) to stay aligned with the rays. See
+    // The CSV lat/lng are OSGB36 geodetic; src/masts.py now applies the same
+    // OSGB36→WGS84 datum shift at the source, so the parser must too — otherwise the
+    // served masts sit ~125 m off the pipeline's rays/masts. These are the
+    // OSGB36→WGS84 transform of the raw (51.46557, -0.095904). See
     // correctSitefinderLatLng in lib/geo/datasetCoordinates.ts.
-    expect(site?.lat).toBeCloseTo(51.46557, 4);
-    expect(site?.lng).toBeCloseTo(-0.095904, 4);
+    expect(site?.lat).toBeCloseTo(51.466078, 4);
+    expect(site?.lng).toBeCloseTo(-0.097512, 4);
+    // the datum shift is a real ~125 m move, not a no-op
+    expect(site?.lat).not.toBeCloseTo(51.46557, 4);
   });
 
   test('handles blank power fields and unknown transmission types', () => {
