@@ -42,7 +42,10 @@ coverage:
 # Phase 2 — cuOpt mast-placement optimisation (max coverage, fewest new masts).
 # Uses NVIDIA's hosted cuOpt MILP service (nvapi key).
 cuopt:
-  api_key: "***REMOVED-CUOPT-KEY***"
+  # SECRET — do NOT commit a real key here. Set it in the environment instead:
+  #   export CUOPT_API_KEY="nvapi-..."        (get one at https://build.nvidia.com)
+  # optimize.py reads CUOPT_API_KEY first and only falls back to this value.
+  api_key: ""
   url: "https://optimize.api.nvidia.com/v1/nvidia/cuopt"
   near_radius_m: 50.0            # a mast this close serves a weak point even without LOS
                                  # (kept tight so shared masts are line-of-sight-safe,

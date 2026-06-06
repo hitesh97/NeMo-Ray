@@ -175,7 +175,15 @@ def optimize(cfg) -> dict:
     }
 
     print("  solving MILP on NVIDIA cuOpt (hosted)...")
-    resp = cuopt.solve_milp(data, cfg["cuopt"]["api_key"], cfg["cuopt"]["url"])
+    # Secret resolution: env var first, config.yaml as fallback. Never commit a real
+    # key to config.yaml — keep it in the environment (CUOPT_API_KEY) or a gitignored file.
+    api_key = os.environ.get("CUOPT_API_KEY") or cfg["cuopt"].get("api_key") or ""
+    if not api_key:
+        raise SystemExit(
+            "No cuOpt API key. Set CUOPT_API_KEY in your environment "
+            "(get one at https://build.nvidia.com → cuOpt)."
+        )
+    resp = cuopt.solve_milp(data, api_key, cfg["cuopt"]["url"])
     sol = cuopt.read_solution(resp)
     chosen = [j for j in range(n_cand)
               if sol["vars"].get(f"y{j}", 0.0) > 0.5]
