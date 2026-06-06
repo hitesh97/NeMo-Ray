@@ -126,6 +126,24 @@ const SERVICE_LABEL: Record<ServiceType, string> = {
 // outlines, so a hard miss usually means the building was simplified out of the set).
 const SERVICE_SNAP_M = 50;
 
+// Almost every service is one OSM footprint and paints as such. A few hospitals are a single
+// campus that OSM splits into many small footprints, so a normal match colours only the chunk
+// under the address point. Those are hardcoded here: every unclaimed footprint whose centroid
+// is within `radiusM` of the campus centre is painted. Kept deliberately small and explicit
+// (rather than a geometric flood-fill) so it can't bleed into neighbours like The Shard and
+// so no other hospital is affected. Centre = the dataset coordinate.
+interface ServiceCampus {
+  lat: number;
+  lng: number;
+  radiusM: number;
+  note: string;
+}
+const SERVICE_CAMPUS: ServiceCampus[] = [
+  { lat: 51.50333, lng: -0.08694, radiusM: 48, note: "Guy's Hospital (tower + podium core)" },
+];
+// How close a service must be to a SERVICE_CAMPUS centre to be treated as that campus.
+const SERVICE_CAMPUS_MATCH_M = 30;
+
 // ---- Animation ------------------------------------------------------------
 const LOOP_LENGTH = 1800;
 const ANIMATION_SPEED = 1.2;
@@ -140,11 +158,9 @@ const RSS_MIN = -115,
 const BOUNCE_LOSS = 6; // dB lost per reflection/diffraction
 
 // Key London places within the simulated square (Bankside/Bermondsey in the west out to
-// Canary Wharf/Greenwich), as orientation pointers. Each carries a `tier` that sets the
-// zoom its label reveals at — tier 0 = major hub/district (shown across the overview),
-// 1 = notable area/landmark, 2 = finer POI (only on zoom-in). This is the Google-Maps-style
-// declutter: the wide view shows just the main names, detail fills in as you zoom, and
-// everything clears when you pull right back past the overview (see labelTierVisible).
+// Canary Wharf/Greenwich), as orientation pointers. Each carries a `tier` — 0 = major
+// hub/district, 1 = notable area/landmark, 2 = finer POI — which maps to a collision
+// priority (LABEL_TIER_PRIORITY) so hubs win overlaps and finer names reveal on zoom-in.
 type LandmarkTier = 0 | 1 | 2;
 interface Landmark {
   name: string;
@@ -165,7 +181,7 @@ const LANDMARKS: Landmark[] = [
   { name: "Tower of London", lng: -0.0759, lat: 51.5081, tier: 1 },
   { name: "Liverpool St", lng: -0.0817, lat: 51.518, tier: 1 },
   { name: "Bank", lng: -0.0886, lat: 51.5134, tier: 1 },
-  { name: "Borough", lng: -0.0922, lat: 51.5012, tier: 1 },
+  { name: "Borough Market", lng: -0.0908, lat: 51.5055, tier: 1 },
   { name: "Elephant & Castle", lng: -0.1003, lat: 51.4946, tier: 1 },
   { name: "Whitechapel", lng: -0.0613, lat: 51.5195, tier: 1 },
   { name: "Aldgate", lng: -0.0755, lat: 51.5143, tier: 1 },
@@ -192,14 +208,13 @@ const LANDMARKS: Landmark[] = [
   { name: "Cutty Sark", lng: -0.0096, lat: 51.4827, tier: 2 },
 ];
 
-// Google-Maps-style label declutter: each tier reveals at its own zoom, so the wide
-// overview shows only the major hubs and finer places fill in on zoom-in — and tier 0's
-// floor clears every label when the camera pulls right back past the overview.
-const LABEL_TIER_MIN_ZOOM: Record<LandmarkTier, number> = { 0: 10.5, 1: 13.2, 2: 14.3 };
+// Google-Maps-style label declutter, done by the GPU collision filter rather than hard
+// zoom gates: every label is always in the layer, but where two would overlap only the
+// higher-priority (lower-tier) one draws. So the wide overview shows just the major hubs,
+// and finer names reveal as you zoom in and they stop colliding. Tier → collision priority
+// (range -1000..1000; higher wins) and on-screen text size.
+const LABEL_TIER_PRIORITY: Record<LandmarkTier, number> = { 0: 80, 1: 40, 2: 0 };
 const LABEL_TIER_SIZE: Record<LandmarkTier, number> = { 0: 13.5, 1: 12, 2: 10.5 };
-const LABEL_TIER_DOT_M: Record<LandmarkTier, number> = { 0: 42, 1: 32, 2: 24 };
-const labelTierVisible = (tier: LandmarkTier, zoom: number) =>
-  zoom >= LABEL_TIER_MIN_ZOOM[tier];
 
 interface Bounds {
   west: number;
@@ -413,12 +428,13 @@ function indexBuildings(buildings: GeoJSON): BuildingCell[] {
   return cells;
 }
 
-// Bind each in-bounds service to its building. A campus/complex is modelled as several
-// stacked or tiled footprints (e.g. Guy's Hospital = a slim tower over a wide podium),
-// so we paint *every* footprint that contains the point — not just the first — and only
-// fall back to the nearest footprint (within SERVICE_SNAP_M) when none contains it. The
-// pin sits over the largest matched mass. A footprint already claimed by another service
-// is left alone; services with no footprint in range are dropped.
+// Bind each in-bounds service to its building: paint the footprint(s) the point sits inside,
+// or the nearest footprint whose centroid is within SERVICE_SNAP_M when none contains it. A
+// service that matches a hardcoded SERVICE_CAMPUS also paints every unclaimed footprint within
+// that campus radius, so a multi-footprint hospital (Guy's) shows as a whole rather than the
+// single chunk under its address point — no other service is affected. Footprints already
+// claimed by another service are left alone; services with no footprint in range are dropped.
+// The pin sits over the largest footprint painted.
 function matchServiceBuildings(
   buildings: GeoJSON,
   payload: EmergencyPayload | null,
@@ -429,7 +445,11 @@ function matchServiceBuildings(
   const markers: Marker[] = [];
   for (const s of payload.services) {
     if (!inBounds(s.lng, s.lat, bounds)) continue;
+    const campus = SERVICE_CAMPUS.find(
+      (c) => metresBetween(s.lng, s.lat, c.lng, c.lat) <= SERVICE_CAMPUS_MATCH_M,
+    );
     const seeds: BuildingCell[] = [];
+    const campusCells: BuildingCell[] = []; // extra footprints inside a hardcoded campus radius
     let nearest: BuildingCell | null = null;
     let best = SERVICE_SNAP_M;
     for (const c of cells) {
@@ -444,6 +464,10 @@ function matchServiceBuildings(
         seeds.push(c);
         continue;
       }
+      if (campus && metresBetween(campus.lng, campus.lat, c.cLng, c.cLat) <= campus.radiusM) {
+        campusCells.push(c);
+        continue;
+      }
       const d = metresBetween(s.lng, s.lat, c.cLng, c.cLat);
       if (d < best) {
         best = d;
@@ -451,12 +475,14 @@ function matchServiceBuildings(
       }
     }
     if (seeds.length === 0 && nearest) seeds.push(nearest);
-    if (seeds.length === 0) continue;
-    let anchor = seeds[0];
-    for (const c of seeds) {
+    const cluster = new Set<BuildingCell>([...seeds, ...campusCells]);
+    if (cluster.size === 0) continue;
+    let anchor: BuildingCell | null = null;
+    for (const c of cluster) {
       c.feature.properties.service = s.type;
-      if (c.area > anchor.area) anchor = c;
+      if (!anchor || c.area > anchor.area) anchor = c;
     }
+    if (!anchor) continue;
     markers.push({
       pos: [anchor.cLng, anchor.cLat],
       type: s.type,
@@ -626,20 +652,45 @@ function buildStaticLayers(data: SceneData, vis: LayerVis): LayersList {
         opacity: 0.92 * vis.buildings.opacity,
         material: MATERIAL,
         getElevation: (f) => f.properties.height || 9,
-        // A footprint matched to an emergency service is wrapped wholesale in that
-        // service's colour — but only while the Emergency Services toggle is on; with it
-        // off the footprint falls back to the normal short→tall height ramp, so toggling
-        // services off removes the colour too (not just the pins/names).
+        // Always the plain short→tall height ramp here. A matched service footprint is
+        // re-drawn opaque in the "service-buildings" overlay below, so its colour reads
+        // cleanly instead of shimmering/z-fighting against overlapping grey footprints inside
+        // this semi-transparent layer (which was making hospitals hard to see).
         getFillColor: (f) =>
-          f.properties.service && vis.services.visible
+          mix(
+            BUILDING_SHORT,
+            BUILDING_TALL,
+            clamp01((f.properties.height || 9) / BUILDING_HEIGHT_REF),
+          ),
+        pickable: false,
+      }),
+    );
+
+  // Emergency-service footprints, painted in the service colour as an OPAQUE overlay sitting
+  // just above the grey massing and biased toward the camera (getPolygonOffset), so the colour
+  // always wins the depth test rather than blending with the translucent buildings beneath or
+  // z-fighting with overlapping grey footprints. Only present while Emergency Services is on;
+  // with it off these footprints fall back to the grey ramp drawn by the buildings layer.
+  const serviceFeatures =
+    data.buildings && data.buildings.type === "FeatureCollection"
+      ? data.buildings.features.filter((f) => (f.properties as BuildingProps | null)?.service)
+      : [];
+  if (serviceFeatures.length > 0 && vis.services.visible)
+    L.push(
+      new GeoJsonLayer<BuildingProps>({
+        id: "service-buildings",
+        data: { type: "FeatureCollection", features: serviceFeatures } as GeoJSON,
+        visible: vis.buildings.visible,
+        extruded: true,
+        opacity: 1,
+        material: MATERIAL,
+        // +2 m so the coloured shell fully wraps its grey twin in the buildings layer.
+        getElevation: (f) => (f.properties.height || 9) + 2,
+        getFillColor: (f) =>
+          f.properties.service
             ? ([...SERVICE_COLOR[f.properties.service], 255] as Color)
-            : mix(
-                BUILDING_SHORT,
-                BUILDING_TALL,
-                clamp01((f.properties.height || 9) / BUILDING_HEIGHT_REF),
-              ),
-        // Recompute the fill when the services toggle flips (data ref is unchanged).
-        updateTriggers: { getFillColor: vis.services.visible },
+            : ([0, 0, 0, 0] as Color),
+        getPolygonOffset: () => [-4, -4],
         pickable: false,
       }),
     );
@@ -670,9 +721,8 @@ function buildStaticLayers(data: SceneData, vis: LayerVis): LayersList {
   L.push(...latticeTowers("masts", data.masts, vis.masts));
   L.push(...latticeTowers("newmasts", data.newMasts, vis.proposed));
 
-  // Place labels are NOT built here: they're rebuilt per-frame against the live zoom so
-  // the tiers reveal/declutter as the camera moves (buildLabelLayers, appended last in the
-  // animate loop so they sit on top).
+  // Place labels are NOT built here: they're rebuilt per-frame from the viewport-decluttered
+  // set (declutterLabels / buildLabelLayers) and appended last so they sit on top.
 
   return L;
 }
@@ -751,21 +801,69 @@ function buildServiceLabels(
   });
 }
 
-// The place labels + their dots, filtered to the tiers visible at the live zoom — the
-// Google-Maps declutter (major hubs across the overview, finer POIs only on zoom-in, all
-// gone when the camera pulls right back). Rebuilt per-frame like the service labels so the
-// reveal tracks zoom without rebuilding the static scene; major hubs render a touch larger.
-function buildLabelLayers(zoom: number, st: LayerState): [ScatterplotLayer<Landmark>, TextLayer<Landmark>] {
-  const shown = LANDMARKS.filter((d) => labelTierVisible(d.tier, zoom));
+// CPU-side label declutter (the GPU CollisionFilterExtension does not render under our
+// non-interleaved MapboxOverlay, so we deconflict ourselves). Given the live map, project
+// every landmark to screen pixels, then greedily keep labels in priority order (major hubs
+// first) — skipping any whose padded text box overlaps one already kept. The result is the
+// Google-Maps declutter: only the hubs survive in the wide view, and finer names reveal as
+// you zoom in and the points spread apart. Recomputed only when the viewport changes.
+const LABEL_PAD_PX = 6; // extra air around each text box when testing overlap
+const labelPriority = (d: Landmark) => LABEL_TIER_PRIORITY[d.tier];
+interface Box {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+function declutterLabels(map: maplibregl.Map): Landmark[] {
+  const canvas = map.getCanvas();
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  const ordered = [...LANDMARKS].sort((a, b) => labelPriority(b) - labelPriority(a));
+  const kept: Landmark[] = [];
+  const boxes: Box[] = [];
+  for (const d of ordered) {
+    const p = map.project([d.lng, d.lat]);
+    // Drop anything well off-screen (with a margin) so off-view labels don't crowd the test.
+    if (p.x < -200 || p.x > width + 200 || p.y < -200 || p.y > height + 200) continue;
+    const size = LABEL_TIER_SIZE[d.tier];
+    const w = d.name.length * size * 0.6 + 12; // rough text width incl. background padding
+    const h = size + 8;
+    const cx = p.x;
+    const cy = p.y - 12; // mirror the label's -12px vertical offset
+    const box: Box = {
+      minX: cx - w / 2 - LABEL_PAD_PX,
+      minY: cy - h / 2 - LABEL_PAD_PX,
+      maxX: cx + w / 2 + LABEL_PAD_PX,
+      maxY: cy + h / 2 + LABEL_PAD_PX,
+    };
+    const hits = boxes.some(
+      (b) => box.minX < b.maxX && box.maxX > b.minX && box.minY < b.maxY && box.maxY > b.minY,
+    );
+    if (hits) continue;
+    kept.push(d);
+    boxes.push(box);
+  }
+  return kept;
+}
+
+// The place labels + the major-hub anchor dots, drawn for the already-deconflicted `shown`
+// set (see declutterLabels). A cyan dot marks the tier-0 hubs only; major hubs render a
+// touch larger than finer POIs. `shown` only changes when the viewport changes, so the
+// per-frame rebuild reuses a stable array and deck.gl skips re-tessellating the text.
+function buildLabelLayers(
+  shown: Landmark[],
+  st: LayerState,
+): [ScatterplotLayer<Landmark>, TextLayer<Landmark>] {
   return [
     new ScatterplotLayer<Landmark>({
       id: "label-dots",
-      data: shown,
+      data: shown.filter((d) => d.tier === 0),
       visible: st.visible,
       opacity: st.opacity,
       getPosition: (d) => [d.lng, d.lat],
       radiusUnits: "meters",
-      getRadius: (d) => LABEL_TIER_DOT_M[d.tier],
+      getRadius: 42,
       radiusMinPixels: 2.5,
       radiusMaxPixels: 6,
       getFillColor: [33, 212, 253, 230],
@@ -924,6 +1022,16 @@ export function DeckScene({ layers }: { layers: LayerVis }) {
       let staticLayers = buildStaticLayers(data, layersRef.current);
       let lastSig = staticSig(layersRef.current);
 
+      // The decluttered place-label set is recomputed only when the viewport actually moves
+      // (zoom/pan/rotate), then reused across frames so the per-frame rebuild hands deck.gl a
+      // stable `data` array and it skips re-tessellating the text.
+      let shownLabels: Landmark[] = declutterLabels(map!);
+      let lastLabelView = "";
+      const labelViewKey = () => {
+        const c = map!.getCenter();
+        return `${map!.getZoom().toFixed(2)}|${c.lng.toFixed(4)}|${c.lat.toFixed(4)}|${map!.getBearing().toFixed(1)}|${map!.getPitch().toFixed(1)}`;
+      };
+
       let time = 0;
       const animate = () => {
         if (cancelled || !overlay) return;
@@ -937,6 +1045,11 @@ export function DeckScene({ layers }: { layers: LayerVis }) {
         const zoom = map?.getZoom() ?? 0;
         const nearEnough = zoom >= SERVICE_LABEL_ZOOM;
         const scale = markerScale(zoom);
+        const vk = labelViewKey();
+        if (vk !== lastLabelView) {
+          shownLabels = declutterLabels(map!);
+          lastLabelView = vk;
+        }
         overlay.setProps({
           layers: [
             ...staticLayers,
@@ -945,8 +1058,8 @@ export function DeckScene({ layers }: { layers: LayerVis }) {
             buildMastDots("newmasts", data.newMasts, MAST_DOT_NEW, scale, L.proposed),
             buildServiceIcons(data.markers, scale, L.services),
             buildServiceLabels(data.markers, nearEnough, L.services, L.labels),
-            // Place labels last so they sit on top, zoom-tiered for the Google-Maps declutter.
-            ...buildLabelLayers(zoom, L.labels),
+            // Place labels last so they sit on top; deconflicted CPU-side per viewport.
+            ...buildLabelLayers(shownLabels, L.labels),
           ],
         });
         raf = requestAnimationFrame(animate);
