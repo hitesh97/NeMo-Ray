@@ -124,14 +124,15 @@ export interface AgentMessage {
   createdAt: number;
 }
 
-// Mirrors the agent's tool registry (modellingsim/.../tools.py TOOL_LABELS).
+// Mirrors the agent's tool registry (agent/nemoray_modelling/tools.py TOOL_LABELS).
 export type ToolName =
   | "run_sionna_coverage"
   | "run_cuopt"
   | "validate_site"
   | "simulate_outage"
   | "move_mast"
-  | "deploy_cow";
+  | "deploy_cow"
+  | "check_starlink";
 
 export type ToolStatus = "queued" | "running" | "success" | "error";
 
@@ -145,6 +146,12 @@ export interface ToolCall {
   progress?: number;
   startedAt?: number;
   finishedAt?: number;
+  /**
+   * Structured observation from the tool (COW position, affected buildings, dead
+   * zones, satellite…), sent by the agent on the success `tool_update`. Kept so the
+   * map can later draw the outcome; the tool card itself renders `result`.
+   */
+  data?: Record<string, unknown>;
 }
 
 /** SSE wire protocol for `/api/agent`. Identical for mock and real. */

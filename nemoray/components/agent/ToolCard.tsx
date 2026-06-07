@@ -6,6 +6,7 @@ import {
   Network,
   Radio,
   Satellite,
+  SatelliteDish,
   ShieldCheck,
   Truck,
   X,
@@ -22,6 +23,7 @@ const ICON: Record<ToolName, LucideIcon> = {
   simulate_outage: Network,
   move_mast: Satellite,
   deploy_cow: Truck,
+  check_starlink: SatelliteDish,
 };
 
 const STATUS_TEXT: Record<ToolStatus, string> = {

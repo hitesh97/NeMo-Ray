@@ -1,10 +1,18 @@
-import type { AgentStreamEvent } from "@/lib/types";
+import type { AgentRole, AgentStreamEvent } from "@/lib/types";
 
 export interface AgentRequest {
   /** Either a free-text operator prompt… */
   prompt?: string;
   /** …or a structured trigger (e.g. site deactivation auto-narration). */
   trigger?: { kind: "site_down"; siteId: string; siteName: string };
+  /**
+   * Prior conversation turns so the backend Nemotron can track back. Assembled by
+   * the store at send time; the `/api/agent` route translates roles to the agent's
+   * user/assistant wire shape.
+   */
+  history?: { role: AgentRole; content: string }[];
+  /** Mast ids the operator has selected on the map (outage / move targets). */
+  selectedSiteIds?: string[];
 }
 
 /**

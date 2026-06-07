@@ -254,7 +254,30 @@ export const useNemoStore = create<NemoState>((set, get) => ({
     })),
   requestAgentRun: (req) => {
     agentNonce += 1;
-    set({ agentTrigger: { req, nonce: agentNonce } });
+    // Enrich the run with the context the backend agent needs: prior conversation
+    // (so Nemotron can track back) and the masts the operator has selected on the
+    // map (outage / move targets). `addOperatorMessage` runs before this on the
+    // prompt path, so drop the trailing operator turn that duplicates req.prompt —
+    // the backend already receives it as the event text.
+    const st = get();
+    const history = st.messages
+      .filter((m) => (m.role === "operator" || m.role === "agent") && m.content.trim())
+      .map((m) => ({ role: m.role, content: m.content }));
+    if (
+      req.prompt &&
+      history.length > 0 &&
+      history[history.length - 1].role === "operator" &&
+      history[history.length - 1].content === req.prompt
+    ) {
+      history.pop();
+    }
+    const selectedSiteIds = st.selectedSiteId ? [st.selectedSiteId] : undefined;
+    const enriched: AgentRequest = {
+      ...req,
+      history: history.length > 0 ? history : undefined,
+      selectedSiteIds: req.selectedSiteIds ?? selectedSiteIds,
+    };
+    set({ agentTrigger: { req: enriched, nonce: agentNonce } });
   },
   clearAgentTrigger: () => set({ agentTrigger: null }),
   applyStreamEvent: (e) =>
