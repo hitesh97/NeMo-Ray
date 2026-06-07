@@ -40,8 +40,42 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+
+# ── map directives (UI geometry) ────────────────────────────────────────────────
+# Tools attach a list of map_action `action` dicts to their ToolResult.ui_actions; the agent
+# loop streams each as a map_action frame the HUD reduces (see nemoray/lib/types.ts MapAction).
+# Coordinates are WGS84 [lng, lat]. These helpers build the action dicts.
+def _feature_bbox(feat: dict[str, Any]) -> list[float] | None:
+    """[minLng, minLat, maxLng, maxLat] of a (Multi)Polygon GeoJSON feature, or None."""
+    geom = feat.get("geometry") or {}
+    t = geom.get("type")
+    coords = geom.get("coordinates") or []
+    rings: list[list[list[float]]] = []
+    if t == "Polygon":
+        rings = coords
+    elif t == "MultiPolygon":
+        rings = [ring for poly in coords for ring in poly]
+    pts = [pt for ring in rings for pt in ring if len(pt) >= 2]
+    if not pts:
+        return None
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _union_bbox(bboxes: list[list[float]]) -> list[float] | None:
+    bboxes = [b for b in bboxes if b]
+    if not bboxes:
+        return None
+    return [
+        min(b[0] for b in bboxes),
+        min(b[1] for b in bboxes),
+        max(b[2] for b in bboxes),
+        max(b[3] for b in bboxes),
+    ]
 
 
 def _warn_fallback(tool: str, reason: str) -> None:
@@ -64,6 +98,7 @@ TOOL_LABELS: dict[str, str] = {
     "move_mast": "Relocate Mast",
     "deploy_cow": "Deploy Cell-on-Wheels",
     "check_starlink": "Check Starlink Backhaul",
+    "find_nearest": "Find Nearest Service",
 }
 
 
@@ -71,6 +106,9 @@ TOOL_LABELS: dict[str, str] = {
 class ToolResult:
     result: str
     observation: dict[str, Any]
+    # Map directives for the HUD (map_action `action` dicts) — highlight zones/buildings,
+    # place the COW + source station, fly the camera. Empty for tools with no UI effect.
+    ui_actions: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -260,6 +298,27 @@ class ToolRegistry:
             },
             self._check_starlink,
         )
+        self._add(
+            "find_nearest",
+            "Find the nearest emergency-service building (hospital, police station or fire "
+            "station) to a point and highlight it on the operator's map. Use this for 'where "
+            "is the nearest X' / 'show me the closest X' questions. Defaults the reference "
+            "point to the last-placed COW, else central London.",
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["hospital", "police", "fire"],
+                        "description": "Which kind of emergency service to locate.",
+                    },
+                    "lat": {"type": "number", "description": "Reference latitude (optional)."},
+                    "lng": {"type": "number", "description": "Reference longitude (optional)."},
+                },
+                "required": ["kind"],
+            },
+            self._find_nearest,
+        )
 
     def _add(
         self,
@@ -392,7 +451,25 @@ class ToolRegistry:
             f"(+{round(pick['coverage_gain_pct'] * 100)}% coverage, "
             f"£{pick['est_cost_gbp']:,})",
             observation={"candidate": pick, "source": "fixture"},
+            ui_actions=self._candidate_ui(pick),
         )
+
+    @staticmethod
+    def _candidate_ui(pick: dict[str, Any]) -> list[dict[str, Any]]:
+        """Map directive for a cuOpt candidate: a gold 'proposal' marker (the recommended new
+        mast / COW site) the camera flies to. cuOpt + Nemotron pick this spot."""
+        gain = round((pick.get("coverage_gain_pct") or 0) * 100)
+        marker = {
+            "id": str(pick.get("candidate_id", "cuopt-candidate")),
+            "position": [pick["lng"], pick["lat"]],
+            "kind": "proposal",
+            "label": pick.get("label", "Proposed mast"),
+            "detail": f"+{gain}% coverage",
+        }
+        return [{
+            "op": "markers", "markers": [marker],
+            "focus": {"center": [pick["lng"], pick["lat"]], "zoom": 14.5, "pitch": 45},
+        }]
 
     # Per-COW capex placeholder until a real cost model lands — the twin returns no cost.
     _COW_COST_GBP = 80000
@@ -454,6 +531,7 @@ class ToolRegistry:
                 "summary": summary,
                 "source": "cuOpt (NVIDIA hosted MILP) via coverage-twin",
             },
+            ui_actions=self._candidate_ui(pick),
         )
 
     # Cached EA-LiDAR backend (loaded once per run; rasters are ~16 MB each).
@@ -634,6 +712,36 @@ class ToolRegistry:
             f"{n_aff} emergency-service building(s) lose coverage"
             + (f" ({bits})" if bits else "")
         )
+        # ── map directives: paint the dead-zone ground (a bbox per hole) + the affected
+        # emergency buildings, and fit the camera to the whole outage extent. Geometry rides
+        # here, NOT in the observation, so the LLM context stays lean.
+        zone_dirs: list[dict[str, Any]] = []
+        for i, f in enumerate(feats):
+            bb = _feature_bbox(f)
+            if not bb:
+                continue
+            props = f.get("properties", {})
+            zone_dirs.append({
+                "id": props.get("id") or f"dz-{i:02d}",
+                "bbox": [round(x, 6) for x in bb],
+                "severity": props.get("severity", "major"),
+            })
+        zone_dirs = zone_dirs[:300]
+        building_markers = [
+            {"id": f"aff-{j}", "position": [b["lng"], b["lat"]], "kind": "building",
+             "label": b["name"], "detail": b["kind"].title()}
+            for j, b in enumerate(affected)
+        ]
+        ui: list[dict[str, Any]] = [{"op": "clear"}]
+        if zone_dirs:
+            zaction: dict[str, Any] = {"op": "zones", "zones": zone_dirs}
+            ub = _union_bbox([zd["bbox"] for zd in zone_dirs])
+            if ub:
+                zaction["focus"] = {"bbox": [round(x, 6) for x in ub], "pitch": 35}
+            ui.append(zaction)
+        if building_markers:
+            ui.append({"op": "markers", "markers": building_markers})
+
         # Observation feeds the LLM's next turn — keep it lean (a 65-zone dump blows the
         # context window). Cap the dead-zone list; the building hits are the salient signal.
         return ToolResult(
@@ -651,6 +759,7 @@ class ToolRegistry:
                 "tiles_resimulated": summary.get("tiles_resimulated"),
                 "source": source,
             },
+            ui_actions=ui,
         )
 
     def _move_mast(self, args: dict[str, Any]) -> ToolResult:
@@ -810,6 +919,27 @@ class ToolRegistry:
              "buildings_protected": c["buildings_protected"], "station": c["depot"]["name"]}
             for c in sorted(reachable, key=lambda c: (-c["buildings_protected"], c["tow_km"]))[:5]
         ]
+        # ── map directives: mark the source fire station (where to retrieve the COW from),
+        # the COW drop point + its coverage disc, and the tow line between them; fly there. ──
+        cow_marker = {
+            "id": "cow-1", "position": [cow["lng"], cow["lat"]], "kind": "cow",
+            "label": "Cell-on-Wheels", "detail": f"{radius_km:.0f} km coverage",
+            "radiusKm": radius_km,
+        }
+        station_marker = {
+            "id": "cow-source", "position": [depot["lng"], depot["lat"]], "kind": "station",
+            "label": depot["name"], "detail": f"COW source · {best['tow_km']} km tow",
+        }
+        ui: list[dict[str, Any]] = [
+            {"op": "clear"},
+            {
+                "op": "cow",
+                "cow": cow_marker,
+                "station": station_marker,
+                "route": [[depot["lng"], depot["lat"]], [cow["lng"], cow["lat"]]],
+                "focus": {"center": [cow["lng"], cow["lat"]], "zoom": 13.5, "pitch": 45},
+            },
+        ]
         return ToolResult(
             result=f"Deploy COW from {depot['name']} ({best['tow_km']} km tow) to "
             f"({best['lat']}, {best['lng']}) @ {height:.0f} m — covers a {radius_km:.0f} km "
@@ -829,6 +959,7 @@ class ToolRegistry:
                 "feasible": True,
                 "source": "Sionna RT coverage twin" if verified else "fixture",
             },
+            ui_actions=ui,
         )
 
     # ── Starlink backhaul (TLE set loaded once per run; ~7k satellites) ──────────
@@ -913,4 +1044,56 @@ class ToolRegistry:
                 "cow_position": {"lat": lat, "lng": lng},
                 "source": "fixture",
             },
+        )
+
+    # ── locate (nearest emergency-service building) ──────────────────────────────
+    # Central-London fallback reference when the operator gives no point and no COW is placed
+    # (centre of the simulated square — Bankside/London Bridge).
+    _DEFAULT_REF = (51.5045, -0.0900)
+
+    def _find_nearest(self, args: dict[str, Any]) -> ToolResult:
+        """Nearest hospital / police / fire building to a reference point, highlighted on the
+        map. Reference = explicit lat/lng → last COW → central London. Data is the bundled
+        London emergency CSVs (no GPU/twin needed)."""
+        from .emergency import haversine_km, load_emergency_buildings
+
+        kind = (args.get("kind") or "").strip().lower()
+        if kind not in ("hospital", "police", "fire"):
+            return ToolResult(
+                result="find_nearest needs kind ∈ hospital|police|fire.",
+                observation={"error": f"bad kind {kind!r}"},
+            )
+        lat, lng = args.get("lat"), args.get("lng")
+        if lat is None or lng is None:
+            ref = self._last_cow or {}
+            lat = ref.get("lat", self._DEFAULT_REF[0])
+            lng = ref.get("lng", self._DEFAULT_REF[1])
+        lat, lng = float(lat), float(lng)
+
+        pool = [b for b in load_emergency_buildings() if b["kind"] == kind]
+        if not pool:
+            _warn_fallback("find_nearest", f"no {kind} buildings loaded")
+            return ToolResult(
+                result=f"No {kind} buildings are loaded.",
+                observation={"error": "no data", "kind": kind},
+            )
+        best = min(pool, key=lambda b: haversine_km(lat, lng, b["lat"], b["lng"]))
+        km = haversine_km(lat, lng, best["lat"], best["lng"])
+
+        marker = {
+            "id": "nearest", "position": [best["lng"], best["lat"]], "kind": "building",
+            "label": best["name"], "detail": f"{kind.title()} · {km:.1f} km",
+        }
+        ui = [{
+            "op": "markers", "markers": [marker],
+            "focus": {"center": [best["lng"], best["lat"]], "zoom": 15.5, "pitch": 45},
+        }]
+        return ToolResult(
+            result=f"Nearest {kind}: {best['name']} ({km:.1f} km away) — highlighted on the map.",
+            observation={
+                "name": best["name"], "kind": kind, "distance_km": round(km, 2),
+                "position": {"lat": best["lat"], "lng": best["lng"]},
+                "source": "data/emergency",
+            },
+            ui_actions=ui,
         )

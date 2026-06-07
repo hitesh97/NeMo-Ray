@@ -6,10 +6,14 @@ import type { AgentRequest } from "@/lib/api/agent";
 import { DEFAULT_LAYERS } from "@/lib/layers";
 import { DEFAULT_SCENARIO, SCENARIOS } from "@/lib/scenarios";
 import type {
+  AgentMapState,
   AgentMessage,
   AgentStreamEvent,
+  BBox,
   CameraCommand,
   CameraCommandType,
+  LngLat,
+  MapAction,
   CoverageStatus,
   CoverageTelemetry,
   DeadZone,
@@ -92,6 +96,11 @@ interface NemoState {
   applyStreamEvent(e: AgentStreamEvent): void;
   resetConversation(): void;
 
+  // ── agent-driven map highlights (map_action directives) ──
+  agentMap: AgentMapState;
+  applyMapAction(a: MapAction): void;
+  clearAgentMap(): void;
+
   // ── voice ──
   voiceAvailable: boolean;
   voiceRecording: boolean;
@@ -125,6 +134,47 @@ interface NemoState {
 
 let agentNonce = 0;
 let cameraNonce = 0;
+
+// ── agent-driven map highlights ──
+const EMPTY_AGENT_MAP: AgentMapState = {
+  zones: [],
+  markers: [],
+  cow: null,
+  station: null,
+  route: null,
+  focus: null,
+};
+
+/**
+ * Pure reducer: fold one {@link MapAction} directive into the accumulated overlay state.
+ * Each op replaces its own slice (zones / markers / cow set); a `focus` bumps a nonce so
+ * DeckScene re-fires the camera even for the same target. `clear` keeps the last focus so
+ * the camera doesn't snap back when highlights are wiped.
+ */
+function reduceAgentMap(prev: AgentMapState, a: MapAction): AgentMapState {
+  const bumpFocus = (f?: { center?: LngLat; bbox?: BBox; zoom?: number; pitch?: number }) =>
+    f ? { focus: { ...f, nonce: (prev.focus?.nonce ?? 0) + 1 } } : null;
+  switch (a.op) {
+    case "clear":
+      return { ...EMPTY_AGENT_MAP, focus: prev.focus };
+    case "zones":
+      return { ...prev, zones: a.zones, ...(bumpFocus(a.focus) ?? {}) };
+    case "markers":
+      return { ...prev, markers: a.markers, ...(bumpFocus(a.focus) ?? {}) };
+    case "cow":
+      return {
+        ...prev,
+        cow: a.cow,
+        station: a.station ?? null,
+        route: a.route ?? null,
+        ...(bumpFocus(a.focus) ?? {}),
+      };
+    case "focus":
+      return { ...prev, focus: { ...a.focus, nonce: (prev.focus?.nonce ?? 0) + 1 } };
+    default:
+      return prev;
+  }
+}
 
 export const useNemoStore = create<NemoState>((set, get) => ({
   // ── scenario ──
@@ -277,7 +327,9 @@ export const useNemoStore = create<NemoState>((set, get) => ({
       history: history.length > 0 ? history : undefined,
       selectedSiteIds: req.selectedSiteIds ?? selectedSiteIds,
     };
-    set({ agentTrigger: { req: enriched, nonce: agentNonce } });
+    // A fresh run starts with a clean map — last turn's highlights are wiped (the new
+    // run's tools repaint as they go). Keeps the overlay in sync with the conversation.
+    set({ agentTrigger: { req: enriched, nonce: agentNonce }, agentMap: EMPTY_AGENT_MAP });
   },
   clearAgentTrigger: () => set({ agentTrigger: null }),
   applyStreamEvent: (e) =>
@@ -319,6 +371,9 @@ export const useNemoStore = create<NemoState>((set, get) => ({
           return {
             toolCalls: st.toolCalls.map((t) => (t.id === e.id ? { ...t, ...e.patch } : t)),
           };
+        case "map_action":
+          // A tool (or the agent) drove the map — fold the directive into the overlay.
+          return { agentMap: reduceAgentMap(st.agentMap, e.action) };
         case "message_end":
           return {
             streaming: false,
@@ -338,7 +393,13 @@ export const useNemoStore = create<NemoState>((set, get) => ({
           return {};
       }
     }),
-  resetConversation: () => set({ messages: [], toolCalls: [], streaming: false, activeMessageId: null }),
+  resetConversation: () =>
+    set({ messages: [], toolCalls: [], streaming: false, activeMessageId: null, agentMap: EMPTY_AGENT_MAP }),
+
+  // ── agent-driven map highlights ──
+  agentMap: EMPTY_AGENT_MAP,
+  applyMapAction: (a) => set((st) => ({ agentMap: reduceAgentMap(st.agentMap, a) })),
+  clearAgentMap: () => set({ agentMap: EMPTY_AGENT_MAP }),
 
   // ── voice ──
   voiceAvailable: false,
@@ -393,3 +454,4 @@ export const useSelectedSite = () =>
 export const usePanels = () => useNemoStore((s) => s.panels);
 export const useLeftRailTab = () => useNemoStore((s) => s.leftRailTab);
 export const useRightRailTab = () => useNemoStore((s) => s.rightRailTab);
+export const useAgentMap = () => useNemoStore((s) => s.agentMap);

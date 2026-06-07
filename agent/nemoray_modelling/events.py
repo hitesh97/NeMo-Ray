@@ -98,3 +98,14 @@ def tool_call(
 def tool_update(call_id: str, **patch: Any) -> dict[str, Any]:
     """A `tool_update` frame patching an in-flight tool (status/progress/result)."""
     return {"type": "tool_update", "id": call_id, "patch": patch}
+
+
+# ── map directives ──────────────────────────────────────────────────────────────
+def map_action(action: dict[str, Any]) -> dict[str, Any]:
+    """A `map_action` frame: a UI directive that mutates the operator's map — highlight
+    dead-zone ground, highlight buildings, place a COW + its source station, or fly the
+    camera. `action` is the discriminated `{op: ...}` dict the HUD reduces into AgentMapState
+    (see `nemoray/lib/types.ts` `MapAction`). Tools attach these as `ToolResult.ui_actions`;
+    `run_agent` yields one frame per action after the tool succeeds. All geometry is WGS84,
+    coordinates as [lng, lat]."""
+    return {"type": "map_action", "action": action}

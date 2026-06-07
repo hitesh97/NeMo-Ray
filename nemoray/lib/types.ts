@@ -132,7 +132,8 @@ export type ToolName =
   | "simulate_outage"
   | "move_mast"
   | "deploy_cow"
-  | "check_starlink";
+  | "check_starlink"
+  | "find_nearest";
 
 export type ToolStatus = "queued" | "running" | "success" | "error";
 
@@ -162,7 +163,70 @@ export type AgentStreamEvent =
   | { type: "tool_call"; call: ToolCall }
   | { type: "tool_update"; id: string; patch: Partial<ToolCall> }
   | { type: "message_end"; id: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  // The agent (its tools) drives the map by emitting map_action frames; the store
+  // reduces them into AgentMapState (below) and DeckScene renders the highlights.
+  | { type: "map_action"; action: MapAction };
+
+// ── agent-driven map directives (map_action) ────────────────────────────────
+// "Tool calls that change the UI": a tool's result is split into lean text for the LLM
+// and these geometry-bearing directives for the map. They flow agent → /api/agent →
+// store.applyMapAction → AgentMapState → MapMount (props) → DeckScene (INVARIANT §2:
+// only MapMount reads the store; the surface takes props). All geometry is WGS84.
+
+/** A dead-zone ground highlight — a bbox (compact, preferred) and/or an outer ring. */
+export interface MapZone {
+  id: string;
+  /** [minLng, minLat, maxLng, maxLat] — drawn as a translucent ground rectangle. */
+  bbox?: BBox;
+  /** Optional precise outer ring [[lng,lat], …] (overrides bbox when present). */
+  polygon?: LngLat[];
+  severity?: "minor" | "major" | "critical";
+  label?: string;
+}
+
+export type MapMarkerKind = "building" | "station" | "cow" | "proposal" | "poi";
+
+/** A highlighted point: an affected building, a COW source station, a COW, a proposal. */
+export interface MapMarker {
+  id: string;
+  position: LngLat;
+  kind: MapMarkerKind;
+  label?: string;
+  /** Secondary line (e.g. "Hospital · 0.8 km", "2.1 km tow"). */
+  detail?: string;
+  /** Optional footprint ring to outline the building. */
+  footprint?: LngLat[];
+  /** Coverage/served radius (km) — drawn as a disc (used by the COW). */
+  radiusKm?: number;
+}
+
+/** Camera intent: fly to a `center`, or fit a `bbox`. */
+export interface MapFocus {
+  center?: LngLat;
+  bbox?: BBox;
+  zoom?: number;
+  pitch?: number;
+}
+
+/** One UI directive emitted by a tool / the agent. Discriminated by `op`. */
+export type MapAction =
+  | { op: "clear" }
+  | { op: "zones"; zones: MapZone[]; focus?: MapFocus }
+  | { op: "markers"; markers: MapMarker[]; focus?: MapFocus }
+  | { op: "cow"; cow: MapMarker; station?: MapMarker; route?: LngLat[]; focus?: MapFocus }
+  | { op: "focus"; focus: MapFocus };
+
+/** Accumulated agent-driven overlay state, reduced from MapAction frames. */
+export interface AgentMapState {
+  zones: MapZone[];
+  markers: MapMarker[];
+  cow: MapMarker | null;
+  station: MapMarker | null;
+  route: LngLat[] | null;
+  /** Fly-to intent; `nonce` makes repeats distinct so DeckScene re-fires the camera. */
+  focus: (MapFocus & { nonce: number }) | null;
+}
 
 // ── cuOpt optimiser ─────────────────────────────────────────────────────────
 export type ProposalStatus =

@@ -33,6 +33,7 @@ import httpx
 
 from .events import error as error_event
 from .events import (
+    map_action,
     message_end,
     message_start,
     stream_reasoning,
@@ -123,8 +124,16 @@ def _system_prompt(tools: list[ToolSpec]) -> str:
         "    coordinates from deploy_cow's result. Then reply `final` naming the fire station, tow",
         "    distance, buildings protected, and the Starlink satellite.",
         "  • Relocate a mast to operator coords: move_mast(site_id,new_lat,new_lng).",
+        "  • 'Where is the nearest hospital / police station / fire station?' (or 'show me the",
+        "    closest X'): call find_nearest(kind) — kind ∈ hospital|police|fire. It highlights",
+        "    the building on the map and flies to it; then reply `final` naming it and the distance.",
         "  • After a tool returns, either call the next required tool or reply `final` — never",
         "    repeat a tool with identical args, and never reply with prose outside `final`.",
+        "",
+        "MAP: every tool automatically highlights its result on the operator's map (dead-zone",
+        "  ground, the COW + the fire station to retrieve it from, the proposed mast site, or a",
+        "  located building) and flies the camera there. So just call the right tool — do NOT",
+        "  recite coordinates; refer to what is now shown ('highlighted on the map').",
     ]
     return "\n".join(lines)
 
@@ -234,6 +243,11 @@ def run_agent(
         # observations LLM-context-lean, so they're small enough to stream.
         yield tool_update(cid, status="success", progress=1, result=result.result,
                           data=result.observation)
+        # The tool may also drive the operator's map (highlight dead zones, place the COW +
+        # its source station, focus a building). These ride a separate map_action frame so
+        # the geometry never bloats the LLM-facing observation above.
+        for action in getattr(result, "ui_actions", None) or []:
+            yield map_action(action)
 
         # Feed the assistant's action + the tool observation back into the loop.
         messages.append({"role": "assistant", "content": json.dumps(decision)})
@@ -370,6 +384,20 @@ class StubPlanner:
             return self._optimise_script(step, last_obs)
         if ev in ("2", "two", "option 2"):
             return self._deploy_script(step, last_obs)
+        if any(k in low for k in ("nearest", "closest", "where is", "where's", "locate")):
+            kind = ("hospital" if "hospital" in low else
+                    "fire" if "fire" in low else
+                    "police" if "police" in low else "hospital")
+            if step == 0:
+                return {"thought": f"Locating the nearest {kind}.",
+                        "action": "find_nearest", "args": {"kind": kind}}
+            name = last_obs.get("name")
+            if name:
+                return {"thought": "Reporting the nearest service.",
+                        "final": f"Nearest {last_obs.get('kind', kind)}: {name} "
+                                 f"({last_obs.get('distance_km', '?')} km) — highlighted on the map."}
+            return {"thought": "Reporting the nearest service.",
+                    "final": f"Highlighted the nearest {kind} on the map."}
         if any(k in low for k in ("down", "offline", "outage", "fail", "break", "lost")):
             return self._outage_script(step, last_obs)
         if any(k in low for k in ("cell-on-wheels", "cell on wheels", "cow", "deploy")):

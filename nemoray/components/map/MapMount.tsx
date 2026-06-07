@@ -5,11 +5,15 @@ import { DeckScene } from "./DeckScene";
 
 /**
  * MapMount — the single component allowed to read the Zustand store on behalf of the
- * map surface (INVARIANTS §2). It selects the layer-visibility state and hands it to
- * {@link DeckScene} as props, so the surface itself stays store-free and the left-rail
- * "Map Layers" toggles drive what the deck.gl scene renders.
+ * map surface (INVARIANTS §2). It selects the layer-visibility state, the agent-driven
+ * map overlay (dead-zone highlights, COW + source station, located buildings) and the
+ * camera command bus, and hands them to {@link DeckScene} as props — so the surface
+ * itself stays store-free. The left-rail "Map Layers" toggles drive `layers`; the
+ * Nemotron agent's `map_action` directives drive `directives`.
  */
 export function MapMount() {
   const layers = useNemoStore((s) => s.layers);
-  return <DeckScene layers={layers} />;
+  const directives = useNemoStore((s) => s.agentMap);
+  const cameraCommand = useNemoStore((s) => s.cameraCommand);
+  return <DeckScene layers={layers} directives={directives} cameraCommand={cameraCommand} />;
 }

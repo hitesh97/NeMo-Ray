@@ -37,6 +37,7 @@ import {
 import {
   GeoJsonLayer,
   PathLayer,
+  PolygonLayer,
   ScatterplotLayer,
   IconLayer,
   TextLayer,
@@ -46,7 +47,16 @@ import { TripsLayer } from "@deck.gl/geo-layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import type { Color, Position, Layer, LayersList } from "@deck.gl/core";
 import type { Feature, GeoJSON, MultiPolygon, Polygon } from "geojson";
-import type { LayerId, LayerState } from "@/lib/types";
+import type {
+  AgentMapState,
+  BBox,
+  CameraCommand,
+  LayerId,
+  LayerState,
+  LngLat,
+  MapMarker,
+  MapZone,
+} from "@/lib/types";
 
 // Which deck layer ids each left-rail toggle (LayerId) controls:
 //   buildings → "buildings"
@@ -975,6 +985,208 @@ function buildRaysLayer(
 // opacities actually changes, not every frame. The services *visibility* is included too
 // (on/off only — not its opacity) because it recolours matched footprints in the static
 // buildings layer; the service pins/names and place labels are per-frame layers.
+// ---- Agent-driven highlights (map_action directives) ----------------------
+// The Nemotron agent's tools stream map_action frames; MapMount folds them into
+// AgentMapState and passes it here as `directives`. These layers draw on top of
+// everything (depthTest off) and pulse, so an outage's dead-zone ground, the COW +
+// its source fire station, and a located building read instantly. Always-on (not
+// gated by the left-rail toggles) — they appear only when the agent sets them.
+const HL_ZONE: RGB = [255, 64, 64]; // dead-zone ground
+const HL_BUILDING: RGB = [255, 209, 64]; // located / affected building (amber)
+const HL_COW: RGB = [80, 220, 130]; // Cell-on-Wheels (green)
+const HL_STATION: RGB = [255, 96, 96]; // COW source (fire station, red)
+const HL_ROUTE: RGB = [120, 200, 255]; // tow route (blue)
+
+const EMPTY_DIRECTIVES: AgentMapState = {
+  zones: [],
+  markers: [],
+  cow: null,
+  station: null,
+  route: null,
+  focus: null,
+};
+
+function bboxRing(b: BBox): Position[] {
+  const [w, s, e, n] = b;
+  return [
+    [w, s],
+    [e, s],
+    [e, n],
+    [w, n],
+    [w, s],
+  ];
+}
+function circleRing(center: LngLat, radiusKm: number, steps = 56): Position[] {
+  const [lng, lat] = center;
+  const dLat = radiusKm / 110.574;
+  const dLng = radiusKm / (111.32 * Math.cos((lat * Math.PI) / 180) || 1e-6);
+  const ring: Position[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * Math.PI * 2;
+    ring.push([lng + dLng * Math.cos(a), lat + dLat * Math.sin(a)]);
+  }
+  return ring;
+}
+function markerColor(kind: MapMarker["kind"]): RGB {
+  switch (kind) {
+    case "cow":
+      return HL_COW;
+    case "station":
+      return HL_STATION;
+    case "proposal":
+      return MAST_DOT_NEW; // gold — matches cuOpt-proposed masts
+    default:
+      return HL_BUILDING; // building / poi
+  }
+}
+
+// Build the agent overlay layers for the current directive state. Rebuilt each frame so
+// the rings/zones can pulse; cheap (a handful of small features). `time` drives the pulse.
+function buildDirectiveLayers(d: AgentMapState, time: number): LayersList {
+  const layers: Layer[] = [];
+  const pulse = 0.5 + 0.5 * Math.sin(time * 0.06); // 0..1
+  // luma.gl v9 parameter: draw the highlights on top of the scene (no depth rejection
+  // against buildings) so a dead zone / COW / building marker is never occluded.
+  const noDepth = { depthCompare: "always" } as const;
+
+  if (d.zones.length) {
+    layers.push(
+      new PolygonLayer<MapZone>({
+        id: "agent-zones",
+        data: d.zones,
+        getPolygon: (z) => (z.polygon ? (z.polygon as Position[]) : z.bbox ? bboxRing(z.bbox) : []),
+        stroked: true,
+        filled: true,
+        extruded: false,
+        getFillColor: [...HL_ZONE, Math.round(36 + 64 * pulse)] as Color,
+        getLineColor: [...HL_ZONE, 230] as Color,
+        lineWidthMinPixels: 1.5,
+        parameters: noDepth,
+        pickable: false,
+      }),
+    );
+  }
+
+  if (d.cow?.radiusKm) {
+    const cow = d.cow;
+    layers.push(
+      new PolygonLayer<MapMarker>({
+        id: "agent-cow-disc",
+        data: [cow],
+        getPolygon: (m) => circleRing(m.position, m.radiusKm ?? 1),
+        stroked: true,
+        filled: true,
+        extruded: false,
+        getFillColor: [...HL_COW, Math.round(20 + 28 * pulse)] as Color,
+        getLineColor: [...HL_COW, 200] as Color,
+        lineWidthMinPixels: 1.5,
+        parameters: noDepth,
+        pickable: false,
+      }),
+    );
+  }
+
+  if (d.route && d.route.length >= 2) {
+    layers.push(
+      new PathLayer<Position[]>({
+        id: "agent-route",
+        data: [d.route as Position[]],
+        getPath: (p) => p,
+        getColor: [...HL_ROUTE, 235] as Color,
+        getWidth: 4,
+        widthMinPixels: 2.5,
+        widthMaxPixels: 6,
+        capRounded: true,
+        jointRounded: true,
+        parameters: noDepth,
+        pickable: false,
+      }),
+    );
+  }
+
+  const footprints = d.markers.filter((m) => m.footprint && m.footprint.length >= 3);
+  if (footprints.length) {
+    layers.push(
+      new PolygonLayer<MapMarker>({
+        id: "agent-footprints",
+        data: footprints,
+        getPolygon: (m) => m.footprint as Position[],
+        stroked: true,
+        filled: true,
+        extruded: false,
+        getFillColor: [...HL_BUILDING, 64] as Color,
+        getLineColor: [...HL_BUILDING, 240] as Color,
+        lineWidthMinPixels: 2,
+        parameters: noDepth,
+        pickable: false,
+      }),
+    );
+  }
+
+  const markers: MapMarker[] = [
+    ...d.markers,
+    ...(d.station ? [d.station] : []),
+    ...(d.cow ? [d.cow] : []),
+  ];
+  if (markers.length) {
+    layers.push(
+      new ScatterplotLayer<MapMarker>({
+        id: "agent-marker-ring",
+        data: markers,
+        getPosition: (m) => m.position,
+        stroked: true,
+        filled: false,
+        getLineColor: (m) => [...markerColor(m.kind), 235] as Color,
+        getRadius: 1,
+        radiusUnits: "pixels",
+        lineWidthMinPixels: 2 + 2 * pulse,
+        radiusMinPixels: 11 + 7 * pulse,
+        radiusMaxPixels: 44,
+        parameters: noDepth,
+        pickable: false,
+      }),
+    );
+    layers.push(
+      new ScatterplotLayer<MapMarker>({
+        id: "agent-marker-dot",
+        data: markers,
+        getPosition: (m) => m.position,
+        filled: true,
+        getFillColor: (m) => [...markerColor(m.kind), 255] as Color,
+        getRadius: 1,
+        radiusUnits: "pixels",
+        radiusMinPixels: 4,
+        radiusMaxPixels: 8,
+        parameters: noDepth,
+        pickable: false,
+      }),
+    );
+    layers.push(
+      new TextLayer<MapMarker>({
+        id: "agent-marker-label",
+        data: markers,
+        getPosition: (m) => m.position,
+        getText: (m) => m.label ?? "",
+        getSize: 12,
+        sizeUnits: "pixels",
+        getColor: [240, 244, 252, 255] as Color,
+        getPixelOffset: [0, -22],
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        getTextAnchor: "middle",
+        getAlignmentBaseline: "bottom",
+        background: true,
+        getBackgroundColor: [10, 14, 22, 205] as Color,
+        backgroundPadding: [5, 3],
+        characterSet: "auto",
+        parameters: noDepth,
+        pickable: false,
+      }),
+    );
+  }
+
+  return layers;
+}
+
 function staticSig(l: LayerVis): string {
   const groups = (["buildings", "masts", "proposed", "deadzone", "coverage"] as const)
     .map((k) => `${l[k].visible ? 1 : 0}:${l[k].opacity}`)
@@ -982,7 +1194,15 @@ function staticSig(l: LayerVis): string {
   return `${groups}|svc:${l.services.visible ? 1 : 0}`;
 }
 
-export function DeckScene({ layers }: { layers: LayerVis }) {
+export function DeckScene({
+  layers,
+  directives = EMPTY_DIRECTIVES,
+  cameraCommand = null,
+}: {
+  layers: LayerVis;
+  directives?: AgentMapState;
+  cameraCommand?: CameraCommand | null;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   // The map is built once in an effect that never re-runs; the animate loop reads the
   // latest layer states through this ref so toggles take effect without remounting the map.
@@ -991,6 +1211,67 @@ export function DeckScene({ layers }: { layers: LayerVis }) {
   useEffect(() => {
     layersRef.current = layers;
   }, [layers]);
+
+  // Agent-driven map highlights (map_action directives) — same ref pattern as layers so the
+  // animate loop picks up new directives without rebuilding the map.
+  const directivesRef = useRef(directives);
+  useEffect(() => {
+    directivesRef.current = directives;
+  }, [directives]);
+
+  // The live MapLibre map, exposed so the camera/focus effects can drive it (the build
+  // effect below is the only writer).
+  const mapRef = useRef<maplibregl.Map | null>(null);
+
+  // Agent fly-to: when a directive carries a `focus` (bumped nonce), fit its bbox or fly to
+  // its centre. Keyed on the nonce so the same target re-fires; guarded until the map exists.
+  useEffect(() => {
+    const f = directives.focus;
+    const map = mapRef.current;
+    if (!f || !map) return;
+    if (f.bbox) {
+      map.fitBounds(
+        [
+          [f.bbox[0], f.bbox[1]],
+          [f.bbox[2], f.bbox[3]],
+        ],
+        { padding: 96, duration: 1300, pitch: f.pitch ?? 45, maxZoom: 16.5 },
+      );
+    } else if (f.center) {
+      map.flyTo({
+        center: f.center,
+        zoom: f.zoom ?? 15,
+        pitch: f.pitch ?? 50,
+        duration: 1300,
+        essential: true,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directives.focus?.nonce]);
+
+  // Camera command bus (left-rail buttons / agent): one-shot intents keyed on nonce.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!cameraCommand || !map) return;
+    switch (cameraCommand.type) {
+      case "zoomIn":
+        map.zoomIn();
+        break;
+      case "zoomOut":
+        map.zoomOut();
+        break;
+      case "reset":
+        map.easeTo({ pitch: 50, bearing: 0, duration: 700 });
+        break;
+      case "tilt2d":
+        map.easeTo({ pitch: 0, duration: 600 });
+        break;
+      case "tilt3d":
+        map.easeTo({ pitch: 55, duration: 600 });
+        break;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraCommand?.nonce]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1018,6 +1299,7 @@ export function DeckScene({ layers }: { layers: LayerVis }) {
         bearing: 0,
         attributionControl: false,
       });
+      mapRef.current = map;
 
       map.on("load", () => {
         if (!map) return;
@@ -1112,6 +1394,9 @@ export function DeckScene({ layers }: { layers: LayerVis }) {
             buildMastDots("newmasts", data.newMasts, MAST_DOT_NEW, scale, L.proposed),
             buildServiceIcons(data.markers, scale, L.services),
             buildServiceLabels(data.markers, nearEnough, L.services, L.labels),
+            // Agent-driven highlights (dead zones / COW / located buildings) over the scene
+            // but under the place labels, pulsing; present only when the agent sets them.
+            ...buildDirectiveLayers(directivesRef.current, time),
             // Place labels last so they sit on top; deconflicted CPU-side per viewport.
             ...buildLabelLayers(shownLabels, L.labels),
           ],
@@ -1126,6 +1411,7 @@ export function DeckScene({ layers }: { layers: LayerVis }) {
       cancelAnimationFrame(raf);
       if (overlay) overlay.finalize();
       if (map) map.remove();
+      mapRef.current = null;
     };
   }, []);
 
