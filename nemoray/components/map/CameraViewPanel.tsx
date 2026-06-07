@@ -35,7 +35,7 @@ export function CameraViewPanel() {
         aria-label="Coverage view"
         className={cn(
           "nm-btn nm-btn--sm nm-btn--ghost",
-          "flex h-8 w-8 items-center justify-center",
+          "flex h-10 w-10 items-center justify-center",
           !isGlobe && "text-nv",
         )}
       >
@@ -49,7 +49,7 @@ export function CameraViewPanel() {
         aria-label="Global / Starlink view"
         className={cn(
           "nm-btn nm-btn--sm nm-btn--ghost",
-          "flex h-8 w-8 items-center justify-center",
+          "flex h-10 w-10 items-center justify-center",
           isGlobe && "text-nv",
         )}
       >
@@ -62,8 +62,8 @@ export function CameraViewPanel() {
 function AntennaIcon() {
   return (
     <svg
-      width="18"
-      height="18"
+      width="22"
+      height="22"
       viewBox="0 0 18 18"
       fill="none"
       stroke="currentColor"
@@ -84,8 +84,8 @@ function AntennaIcon() {
 function SatelliteIcon() {
   return (
     <svg
-      width="18"
-      height="18"
+      width="22"
+      height="22"
       viewBox="0 0 18 18"
       fill="none"
       stroke="currentColor"

@@ -1561,6 +1561,10 @@ export function DeckScene({
   // loop extrapolates them forward every frame (see interpolatedPositions).
   const satTracksRef = useRef<Map<string, SatTrack>>(new Map());
 
+  // Timestamp set when "flyToGlobe" is pressed; lets the animate loop fade satellites in
+  // immediately (rather than waiting for zoom to drop below 7) so they don't pop in.
+  const flyToGlobeAtRef = useRef<number | null>(null);
+
   // Place labels, sourced from the canonical gazetteer on mount (see toLabelLandmarks); the
   // hardcoded LANDMARKS array is the fallback. declutterLabels reads this ref.
   const landmarksRef = useRef<Landmark[]>(LANDMARKS);
@@ -1614,6 +1618,7 @@ export function DeckScene({
       // Starlink view toggle: dive into the London coverage twin, or pull out to the
       // globe where the live constellation renders (satellites fade in past zoom ~7).
       case "flyToLondon":
+        flyToGlobeAtRef.current = null;
         map.flyTo({
           center: [cLngRef.current, cLatRef.current],
           zoom: 12.6,
@@ -1624,6 +1629,7 @@ export function DeckScene({
         });
         break;
       case "flyToGlobe":
+        flyToGlobeAtRef.current = Date.now();
         map.flyTo({
           center: [0, 25],
           zoom: 1.5,
@@ -1784,7 +1790,16 @@ export function DeckScene({
           lastLabelView = vk;
         }
         // Starlink constellation: only at globe zoom (≤4 full, fading out by zoom 7).
-        const satOpacity = Math.max(0, Math.min(1, (7 - zoom) / 3));
+        let satOpacity = Math.max(0, Math.min(1, (7 - zoom) / 3));
+        // If flyToGlobe was just pressed, fade satellites in immediately so they don't pop —
+        // blend with the zoom-based opacity and take whichever is higher, until the zoom-out
+        // catches up (≤3) and the zoom-based curve takes over.
+        if (flyToGlobeAtRef.current !== null) {
+          const elapsed = Date.now() - flyToGlobeAtRef.current;
+          const fadeIn = Math.min(1, elapsed / 1400);
+          satOpacity = Math.max(satOpacity, fadeIn);
+          if (zoom <= 3) flyToGlobeAtRef.current = null;
+        }
         const sats = satOpacity > 0 ? interpolatedPositions(satTracksRef.current, Date.now()) : [];
         overlay.setProps({
           layers: [
