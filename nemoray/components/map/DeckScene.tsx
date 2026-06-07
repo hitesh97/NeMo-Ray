@@ -108,6 +108,7 @@ const MAST_WHITE: RGB = [232, 236, 244];
 const MAST_RED: RGB = [226, 58, 53];
 const MAST_DOT_EE: RGB = [40, 130, 255]; // blue beacon → existing EE masts
 const MAST_DOT_NEW: RGB = [255, 200, 60]; // gold beacon → cuOpt-proposed masts
+const MAST_DOT_DOWN: RGB = [255, 56, 56]; // red beacon → mast taken offline (outage)
 const MAST_REF_RING: RGB = [255, 120, 40]; // amber ring → mast referenced in the chat composer
 // Screen-space line widths (px) for the lattice members — legs boldest, bracing finest.
 const LATTICE_LEG_W = 2.4;
@@ -267,6 +268,8 @@ interface Trip {
   path: Position[];
   timestamps: number[];
   color: RGB;
+  // The mast origin (coordKey of path[0]) so an outage can drop a downed mast's rays.
+  originKey: string;
 }
 // A sited antenna: ground position, the metres-tall it should render at (`vh`), and the
 // site id (`id`) so a click can reference it back to the network/agent.
@@ -319,7 +322,7 @@ async function fetchJSON(url: string): Promise<unknown> {
   return r.json();
 }
 
-const coordKey = (coord: number[]) => `${coord[0].toFixed(6)},${coord[1].toFixed(6)}`;
+const coordKey = (coord: ArrayLike<number>) => `${coord[0].toFixed(6)},${coord[1].toFixed(6)}`;
 
 // Yellow (light coverage stress) → red (heavy coverage stress).
 const loadHeatColor = (t: number): RGB => mix(LOAD_YELLOW, LOAD_RED, clamp01(t));
@@ -358,13 +361,14 @@ function toTrips(fc: FC<RayFeature>): Trip[] {
     if (total <= 0) continue;
     const phase = Math.random() * LOOP_LENGTH;
     const timestamps = cum.map((c) => phase + (c / total) * RAY_DURATION);
-    const color = loadHeatColor(loadRank.get(coordKey(coords[0])) ?? 0);
+    const originKey = coordKey(coords[0]);
+    const color = loadHeatColor(loadRank.get(originKey) ?? 0);
     const path = coords as unknown as Position[];
-    trips.push({ path, timestamps, color });
+    trips.push({ path, timestamps, color, originKey });
     // Seamless loop: a ray whose pulse straddles the loop boundary is duplicated one
     // loop earlier, so it flows continuously across the wrap (no visible reset).
     if (phase + RAY_DURATION + TRAIL_LENGTH > LOOP_LENGTH)
-      trips.push({ path, timestamps: timestamps.map((ts) => ts - LOOP_LENGTH), color });
+      trips.push({ path, timestamps: timestamps.map((ts) => ts - LOOP_LENGTH), color, originKey });
   }
   return trips;
 }
@@ -643,7 +647,9 @@ function buildMastDots(
   dot: RGB,
   scale: number,
   st: LayerState,
+  downed?: Set<string>,
 ): ScatterplotLayer<Mast> {
+  const downSig = downed && downed.size ? [...downed].sort().join(",") : "";
   return new ScatterplotLayer<Mast>({
     id: `${idPrefix}-dot`,
     data: masts,
@@ -657,11 +663,14 @@ function buildMastDots(
     getRadius: 5 * scale,
     radiusMinPixels: 3 * scale,
     radiusMaxPixels: 8 * scale,
-    getFillColor: [...dot, 255] as Color,
+    // A downed mast burns red; everything else keeps its operator beacon colour.
+    getFillColor: (d) =>
+      (d.id && downed?.has(d.id) ? [...MAST_DOT_DOWN, 255] : [...dot, 255]) as Color,
     stroked: true,
     lineWidthMinPixels: 1.4,
     getLineColor: [8, 12, 18, 255],
     parameters: { depthCompare: "always" },
+    updateTriggers: { getFillColor: downSig },
   });
 }
 
@@ -1590,6 +1599,7 @@ export function DeckScene({
   directives = EMPTY_DIRECTIVES,
   cameraCommand = null,
   referencedSiteIds = EMPTY_REF_IDS,
+  deactivatedSiteIds = EMPTY_REF_IDS,
   onPickMast,
 }: {
   layers: LayerVis;
@@ -1597,6 +1607,8 @@ export function DeckScene({
   cameraCommand?: CameraCommand | null;
   /** Mast ids the operator has referenced in the chat composer (drawn with a ring). */
   referencedSiteIds?: string[];
+  /** Mast ids that are offline (outage): their beacon turns red and their rays are dropped. */
+  deactivatedSiteIds?: string[];
   /** Called with a mast id when the operator clicks an antenna on the map. */
   onPickMast?: (id: string) => void;
 }) {
@@ -1626,6 +1638,10 @@ export function DeckScene({
   useEffect(() => {
     onPickMastRef.current = onPickMast;
   }, [onPickMast]);
+  const downedRef = useRef<Set<string>>(new Set(deactivatedSiteIds));
+  useEffect(() => {
+    downedRef.current = new Set(deactivatedSiteIds);
+  }, [deactivatedSiteIds]);
 
   // The live MapLibre map, exposed so the camera/focus effects can drive it (the build
   // effect below is the only writer).
@@ -1817,6 +1833,27 @@ export function DeckScene({
       let staticLayers = buildStaticLayers(data, layersRef.current);
       let lastSig = staticSig(layersRef.current);
 
+      // Outage state: when the downed-mast set changes, drop those masts' rays (matched by
+      // origin coord) and remember the set so their beacon dots burn red. Recomputed only on
+      // change — never per frame — so filtering the full trip array stays cheap.
+      let liveTrips = data.trips;
+      let lastDownedSig = "";
+      const recomputeDowned = (downed: Set<string>) => {
+        const sig = downed.size ? [...downed].sort().join(",") : "";
+        if (sig === lastDownedSig) return;
+        lastDownedSig = sig;
+        if (!downed.size) {
+          liveTrips = data.trips;
+          return;
+        }
+        const downedKeys = new Set(
+          data.masts.filter((m) => m.id && downed.has(m.id)).map((m) => coordKey(m.pos)),
+        );
+        liveTrips = downedKeys.size
+          ? data.trips.filter((t) => !downedKeys.has(t.originKey))
+          : data.trips;
+      };
+
       // The decluttered place-label set is recomputed only when the viewport actually moves
       // (zoom/pan/rotate), then reused across frames so the per-frame rebuild hands deck.gl a
       // stable `data` array and it skips re-tessellating the text.
@@ -1862,6 +1899,8 @@ export function DeckScene({
           staticLayers = buildStaticLayers(data, L);
           lastSig = sig;
         }
+        const downed = downedRef.current;
+        recomputeDowned(downed);
         const zoom = map?.getZoom() ?? 0;
         const nearEnough = zoom >= SERVICE_LABEL_ZOOM;
         const scale = markerScale(zoom);
@@ -1887,10 +1926,10 @@ export function DeckScene({
         overlay.setProps({
           layers: [
             ...staticLayers,
-            buildRaysLayer(data.trips, time, zoom, L.rays),
+            buildRaysLayer(liveTrips, time, zoom, L.rays),
             // Ring referenced masts behind the beacon dots so the selection reads on the map.
             buildMastRefRings(data.masts, referencedRef.current, scale, refPulse),
-            buildMastDots("masts", data.masts, MAST_DOT_EE, scale, L.masts),
+            buildMastDots("masts", data.masts, MAST_DOT_EE, scale, L.masts, downed),
             buildMastDots("newmasts", data.newMasts, MAST_DOT_NEW, scale, L.proposed),
             // Invisible click targets on top of the EE beacons — only when masts are visible.
             ...(L.masts.visible

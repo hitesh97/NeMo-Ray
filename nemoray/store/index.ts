@@ -66,6 +66,8 @@ interface NemoState {
   toggleReferencedSite(id: SiteId): void;
   clearReferencedSites(): void;
   deactivateSite(id: SiteId): void;
+  /** Take several masts offline at once (no per-site agent auto-run) — used by the chat takedown. */
+  deactivateSites(ids: SiteId[]): void;
   reactivateSite(id: SiteId): void;
   toggleSite(id: SiteId): void;
   recomputeCoverage(): Promise<void>;
@@ -288,6 +290,17 @@ export const useNemoStore = create<NemoState>((set, get) => ({
     set((st) => ({
       deactivatedSiteIds: st.deactivatedSiteIds.filter((x) => x !== id),
       sites: st.sites.map((s) => (s.id === id ? { ...s, status: "active" } : s)),
+    }));
+    void get().recomputeCoverage();
+  },
+
+  deactivateSites: (ids) => {
+    const add = ids.filter((id) => !get().deactivatedSiteIds.includes(id));
+    if (add.length === 0) return;
+    const down = new Set(add);
+    set((st) => ({
+      deactivatedSiteIds: [...st.deactivatedSiteIds, ...add],
+      sites: st.sites.map((s) => (down.has(s.id) ? { ...s, status: "deactivated" } : s)),
     }));
     void get().recomputeCoverage();
   },

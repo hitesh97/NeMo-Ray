@@ -156,6 +156,41 @@ def _zones_for_sites(site_ids: list[str]) -> list[dict[str, Any]]:
     return feats
 
 
+# How close a coverage hole must sit to a downed mast to count as part of *this* outage. The
+# twin's out/hotspots.geojson lists EVERY hole in the scene (the baseline dead zones, with or
+# without the outage); without this clip an outage would report dead zones — and place a COW —
+# across the whole city instead of the chunk around the masts that actually went down.
+OUTAGE_ZONE_RADIUS_KM = 1.5
+
+
+def _zones_near_sites(
+    feats: list[dict[str, Any]],
+    site_ids: list[str],
+    radius_km: float = OUTAGE_ZONE_RADIUS_KM,
+) -> list[dict[str, Any]]:
+    """Keep only the dead-zone features within `radius_km` of one of the downed masts, so an
+    outage's holes (and the COW deployed for them) cluster at the incident rather than spanning
+    every baseline hole the twin returns scene-wide. Returns [] when nothing is near (the caller
+    falls back to drawing zones at the masts); passes everything through if no mast resolves."""
+    from .emergency import feature_centroid, haversine_km
+
+    pos = _mast_positions()
+    pts = [pos[str(s)] for s in site_ids if pos.get(str(s))]
+    if not pts:
+        # No downed-mast position resolved — return nothing rather than the whole scene's
+        # holes, so a missing artifact can never strand a COW across the city. Callers fall
+        # back to drawing zones at the masts, then to the central fixtures.
+        return []
+    out: list[dict[str, Any]] = []
+    for f in feats:
+        c = feature_centroid(f)  # (lng, lat)
+        if not c:
+            continue
+        if any(haversine_km(c[1], c[0], p[1], p[0]) <= radius_km for p in pts):
+            out.append(f)
+    return out
+
+
 # Pre-rendered outages, one per HUD scenario (nemoray/lib/scenarios.ts Scenario.outage.siteIds).
 # The ids are real EE/Orange masts from masts.geojson clustered over each incident's epicentre,
 # so "simulate the scenario's outage" opens holes in a believable place with no operator
@@ -998,6 +1033,10 @@ class ToolRegistry:
             res = self._post_coverage(twin, list(site_ids))
             if res is not None and res[0].get("disabled_matched"):
                 summary, feats = res
+                # Clip the twin's scene-wide holes to the outage neighbourhood — otherwise every
+                # scenario reports the same city-wide dead zones (and emergency buildings right
+                # across London) instead of the chunk around the masts that went down.
+                feats = _zones_near_sites(feats, site_ids) or _zones_for_sites(site_ids) or feats
                 source = "Sionna RT coverage twin"
 
         if source == "fixture":
@@ -1150,11 +1189,17 @@ class ToolRegistry:
         radius_km = COW_COVERAGE_KM
 
         twin = self._twin_url()
-        holes = self._fetch_twin_holes(twin) if twin else None
-        # Fixture: place the COW against the SAME dead zones the outage opened (holes around the
-        # downed masts), so the deployment is consistent with simulate_outage's map.
-        feats = holes or _zones_for_sites(disabled) or self._fixture_zones()
-        if not holes:
+        twin_holes = self._fetch_twin_holes(twin) if twin else None
+        # The dead zone opens AT the masts that went down, so anchor the COW candidates on the
+        # downed masts' real positions first — accurate by construction, and it matches the dead
+        # zones simulate_outage painted. The twin's hotspots.geojson is the *baseline* scene-wide
+        # hole set (not recomputed for this outage), so it's only a fallback when no downed-mast
+        # position resolves (e.g. masts.geojson absent) — and even then clipped to near the
+        # outage, never scene-wide (which would strand the COW wherever the city's holes cluster).
+        mast_zones = _zones_for_sites(disabled)
+        holes = _zones_near_sites(twin_holes, disabled) if (twin_holes and not mast_zones) else None
+        feats = mast_zones or holes or self._fixture_zones()
+        if not twin_holes:
             _warn_fallback(
                 "deploy_cow",
                 "TWIN_URL not set" if not twin else "twin returned no holes / unreachable",

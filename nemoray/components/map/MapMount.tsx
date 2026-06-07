@@ -17,6 +17,7 @@ export function MapMount() {
   const directives = useNemoStore((s) => s.agentMap);
   const cameraCommand = useNemoStore((s) => s.cameraCommand);
   const referencedSiteIds = useNemoStore((s) => s.referencedSiteIds);
+  const deactivatedSiteIds = useNemoStore((s) => s.deactivatedSiteIds);
   const toggleReferencedSite = useNemoStore((s) => s.toggleReferencedSite);
   return (
     <DeckScene
@@ -24,6 +25,7 @@ export function MapMount() {
       directives={directives}
       cameraCommand={cameraCommand}
       referencedSiteIds={referencedSiteIds}
+      deactivatedSiteIds={deactivatedSiteIds}
       onPickMast={toggleReferencedSite}
     />
   );
