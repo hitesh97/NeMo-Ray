@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 
-from . import export, rt as RT
+from . import export
+from . import rt as RT
 from .geo import lnglat_to_en
 from .gpu import GpuMonitor, perf_summary
 from .masts import Site, load_sites
@@ -88,6 +90,72 @@ def _affected(cfg, disabled_ids, added):
     return sites_now, buildings, tiles, affected_keys, matched, unknown, added_sites
 
 
+# ── re-sim result cache ────────────────────────────────────────────────────────
+# resimulate() is deterministic in (disabled_ids, added, trace_rays): the per-tile
+# baseline RT solve is geometry-keyed (data/tiles/…), so only the mast set varies and
+# the same change always yields the same coverage. The GPU re-solve of the affected
+# tiles is the slow part (seconds × N tiles) — yet the agent re-issues identical
+# changes constantly (re-running "simulate masts X offline", or the coverage step of an
+# optimise flow it already ran). So memoise the whole result INCLUDING the output
+# artifacts the HUD fetches; on a repeat, just rewrite those files and return the cached
+# summary — no GPU. Process-lifetime, tiny LRU (the box is ephemeral). Disable with
+# NEMORAY_RESIM_CACHE=0.
+_RESIM_CACHE: dict[str, dict] = {}
+_RESIM_CACHE_ORDER: list[str] = []
+_RESIM_CACHE_MAX = 12
+# A single lock serialises re-sims: they all clobber the same out/ artifacts, so running
+# two at once corrupts them regardless of the cache — serialising is the correct fix.
+_RESIM_LOCK = threading.Lock()
+# Output files whose contents depend on the mast change (so must be restored on a hit).
+# coverage_bounds.json is the tile extent — invariant across re-sims — so leave it alone.
+_RESIM_ARTIFACTS = ("coverage.png", "hotspots.geojson", "perf.json")
+
+
+def _resim_sig(disabled_ids, added, trace_rays) -> str:
+    """Stable signature of a re-sim request — order-independent in disabled ids and added
+    masts, rounded so float jitter doesn't defeat the cache."""
+    d = sorted(str(x) for x in (disabled_ids or []))
+    a = sorted(
+        [str(x.get("id", "added")),
+         round(float(x["lat"]), 6), round(float(x["lng"]), 6),
+         (round(float(x["height_m"]), 2) if x.get("height_m") is not None else None)]
+        for x in (added or []) if x.get("lat") is not None and x.get("lng") is not None
+    )
+    return json.dumps([d, a, bool(trace_rays)], sort_keys=True)
+
+
+def _resim_artifact_names(trace_rays) -> tuple[str, ...]:
+    return _RESIM_ARTIFACTS + (("new_rays.geojson",) if trace_rays else ())
+
+
+def _capture_artifacts(cfg, trace_rays) -> dict[str, bytes]:
+    out = cfg["paths"]["out_dir"]
+    blobs: dict[str, bytes] = {}
+    for name in _resim_artifact_names(trace_rays):
+        try:
+            with open(os.path.join(out, name), "rb") as f:
+                blobs[name] = f.read()
+        except OSError:
+            pass
+    return blobs
+
+
+def _restore_artifacts(cfg, blobs: dict[str, bytes]) -> None:
+    out = cfg["paths"]["out_dir"]
+    for name, data in blobs.items():
+        with open(os.path.join(out, name), "wb") as f:
+            f.write(data)
+
+
+def _cache_store(sig, result, artifacts) -> None:
+    _RESIM_CACHE[sig] = {"result": dict(result), "artifacts": artifacts}
+    if sig in _RESIM_CACHE_ORDER:
+        _RESIM_CACHE_ORDER.remove(sig)
+    _RESIM_CACHE_ORDER.append(sig)
+    while len(_RESIM_CACHE_ORDER) > _RESIM_CACHE_MAX:
+        _RESIM_CACHE.pop(_RESIM_CACHE_ORDER.pop(0), None)
+
+
 def resimulate(cfg, disabled_ids=None, added=None, trace_rays=False) -> dict:
     """Re-solve the affected tiles with `disabled_ids` removed and `added` masts added.
 
@@ -95,7 +163,31 @@ def resimulate(cfg, disabled_ids=None, added=None, trace_rays=False) -> dict:
     trace_rays=True to also re-trace the affected-tile rays in the same pass; otherwise the
     viewer fires `trace_affected_rays` (POST /api/rays) after the change. Re-writes
     out/coverage.png + out/hotspots.geojson. Returns the summary the agent consumes.
+
+    Memoised on (disabled_ids, added, trace_rays) — a repeat of the same change restores the
+    cached artifacts and skips the GPU re-solve (disable with NEMORAY_RESIM_CACHE=0).
     """
+    use_cache = os.environ.get("NEMORAY_RESIM_CACHE", "1") != "0"
+    sig = _resim_sig(disabled_ids, added, trace_rays)
+
+    with _RESIM_LOCK:
+        if use_cache and sig in _RESIM_CACHE:
+            entry = _RESIM_CACHE[sig]
+            _restore_artifacts(cfg, entry["artifacts"])
+            _RESIM_CACHE_ORDER.remove(sig)
+            _RESIM_CACHE_ORDER.append(sig)            # bump LRU recency
+            out = dict(entry["result"])
+            out["cached"] = True
+            return out
+        result = _resimulate_uncached(cfg, disabled_ids, added, trace_rays)
+        result["cached"] = False
+        if use_cache:
+            _cache_store(sig, result, _capture_artifacts(cfg, trace_rays))
+        return result
+
+
+def _resimulate_uncached(cfg, disabled_ids=None, added=None, trace_rays=False) -> dict:
+    """The actual GPU re-solve — see resimulate() for the memoised entry point."""
     half = cfg["tiling"]["tile_size_m"] / 2
     thr = cfg["coverage"]["served_threshold_dbm"]
     (sites_now, buildings, tiles, affected_keys,
