@@ -48,6 +48,11 @@ cuopt:
   # optimize.py reads CUOPT_API_KEY first and only falls back to this value.
   api_key: ""
   url: "https://optimize.api.nvidia.com/v1/nvidia/cuopt"
+  # Resilience: if the hosted endpoint above fails (network/key/outage) — or no
+  # CUOPT_API_KEY is set — fall back to a LOCAL self-hosted cuOpt server on the same GPU box.
+  # Start it with brev/serve-cuopt.sh (`python -m cuopt_server.cuopt_service --port 5000`).
+  fallback_local: true           # set false to require the hosted endpoint (no local fallback)
+  local_url: "http://localhost:5000"   # self-hosted cuOpt server (CUOPT_LOCAL_URL overrides)
   near_radius_m: 250.0           # a 25 m / 58 dBm macro mast serves weak points within this
                                  # radius — set to a realistic small-cell reach so ONE mast
                                  # covers a whole cluster of holes (few, well-spread masts)

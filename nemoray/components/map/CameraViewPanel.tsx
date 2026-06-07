@@ -7,8 +7,8 @@ import { cn } from "@/lib/cn";
  * Camera-view toggle — a small on-map control that swaps between the two scene framings:
  *
  *  • Antenna  → `flyToLondon`: dive into the 3D coverage twin (masts, rays, buildings).
- *  • Satellite → `flyToGlobe`: pull out to the globe where the live Starlink constellation
- *    (from `/api/starlink`) is visible and clickable.
+ *  • Satellite → `flyToGlobe`: pull out to the UK framing where the live Starlink constellation
+ *    (from `/api/starlink`) is seen drifting over Britain, visible and clickable.
  *
  * It issues one-shot camera intents on the store's camera bus (`requestCamera`); the active
  * framing is inferred from the last command so the matching button highlights. DeckScene
@@ -45,8 +45,8 @@ export function CameraViewPanel() {
       {/* Satellite — fly out to the globe / constellation view */}
       <button
         onClick={() => requestCamera("flyToGlobe")}
-        title="Global / Starlink view"
-        aria-label="Global / Starlink view"
+        title="UK / Starlink view"
+        aria-label="UK / Starlink view"
         className={cn(
           "nm-btn nm-btn--sm nm-btn--ghost",
           "flex h-10 w-10 items-center justify-center",

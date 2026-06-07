@@ -54,8 +54,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
             {/* on-map key for the deck.gl vocabulary (rays / masts / services / …) */}
             <MapLegend />
-            {/* camera-view toggle (coverage ⇄ globe/Starlink) — bottom-right, above overlay */}
-            <div className="pointer-events-auto absolute bottom-3 right-3 z-20">
+            {/* camera-view toggle (coverage ⇄ UK/Starlink) — top-right, above overlay */}
+            <div className="pointer-events-auto absolute right-3 top-3 z-20">
               <CameraViewPanel />
             </div>
           </main>

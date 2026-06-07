@@ -174,21 +174,22 @@ def optimize(cfg) -> dict:
         "solver_config": {"time_limit": int(cfg["cuopt"]["time_limit_s"])},
     }
 
-    print("  solving MILP on NVIDIA cuOpt (hosted)...")
-    # Secret resolution: env var first, config.yaml as fallback. Never commit a real
-    # key to config.yaml — keep it in the environment (CUOPT_API_KEY) or a gitignored file.
+    print("  solving the mast-placement MILP on cuOpt...")
+    # Secret resolution: env var first, config.yaml fallback. Never commit a real key. No key is
+    # OK when a local self-hosted cuOpt is available — solve_milp falls back to it (and to it on
+    # any hosted failure), unless cuopt.fallback_local is false.
     api_key = os.environ.get("CUOPT_API_KEY") or cfg["cuopt"].get("api_key") or ""
-    if not api_key:
-        raise SystemExit(
-            "No cuOpt API key. Set CUOPT_API_KEY in your environment "
-            "(get one at https://build.nvidia.com → cuOpt)."
-        )
-    resp = cuopt.solve_milp(data, api_key, cfg["cuopt"]["url"])
+    resp = cuopt.solve_milp(
+        data, api_key, cfg["cuopt"]["url"],
+        local_url=cfg["cuopt"].get("local_url"),
+        allow_local_fallback=bool(cfg["cuopt"].get("fallback_local", True)),
+    )
+    solver_label = resp.get("_nemoray_solver", cuopt.SOLVER_HOSTED)
     sol = cuopt.read_solution(resp)
     chosen = [j for j in range(n_cand)
               if sol["vars"].get(f"y{j}", 0.0) > 0.5]
-    print(f"  cuOpt: {sol['status']}, {len(chosen)} new masts "
-          f"(solve {sol['solve_time']:.2f}s)")
+    solve_s = f"{sol['solve_time']:.2f}s" if sol["solve_time"] else "n/a"
+    print(f"  {solver_label}: {sol['status']}, {len(chosen)} new masts (solve {solve_s})")
 
     # Invert the sparse coverage to count what each chosen mast serves.
     chosen_set = set(chosen)
@@ -223,7 +224,7 @@ def optimize(cfg) -> dict:
         "new_masts": len(chosen),
         "holes_now_covered": len(covered_demands),
         "coverage_radius_m": radius,
-        "solver": "NVIDIA cuOpt (hosted MILP)",
+        "solver": solver_label,
         "status": sol["status"],
         "objective": sol["objective"],
         "solve_time_s": round(sol["solve_time"], 3) if sol["solve_time"] else None,

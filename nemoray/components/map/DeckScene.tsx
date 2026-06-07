@@ -1219,8 +1219,9 @@ function staticSig(l: LayerVis): string {
 // Live satellite positions come from `/api/starlink` (SGP4 over the bundled TLE set),
 // refreshed every 15 s; between refreshes the animate loop extrapolates each satellite
 // forward from its last snapshot + averaged velocity so the constellation drifts
-// continuously instead of jumping. Satellites only render at globe zoom (they fade out by
-// zoom 7), reachable via the CameraViewPanel "satellite" button (camera "flyToGlobe").
+// continuously instead of jumping. Satellites render at the UK framing (they fade out as you
+// dive to London, gone by zoom 8), reachable via the CameraViewPanel "satellite" button
+// (camera "flyToGlobe" — now a UK pull-out, not a world globe).
 
 // London centroid used for nearest-satellite calculations.
 const LONDON_LAT = 51.5074;
@@ -1421,7 +1422,7 @@ function buildSatelliteLayers(
   onClickSat: (sat: SatellitePosition) => void,
 ): Layer[] {
   if (!sats.length || opacity <= 0) return [];
-  // 14 px at UK zoom (≥5), shrinks to ~6 px at globe zoom (1.5). Clamped [5, 14].
+  // ~13–14 px across the UK framing (zoom ~4.7+); shrinks toward 5 px on dive-in. Clamped [5, 14].
   const iconSize = Math.round(Math.max(5, Math.min(14, 4 + zoom * 2)));
   interface SatDatum {
     pos: Position;
@@ -1616,7 +1617,7 @@ export function DeckScene({
         map.easeTo({ pitch: 55, duration: 600 });
         break;
       // Starlink view toggle: dive into the London coverage twin, or pull out to the
-      // globe where the live constellation renders (satellites fade in past zoom ~7).
+      // UK framing where the live constellation renders (satellites fade in as you zoom out).
       case "flyToLondon":
         flyToGlobeAtRef.current = null;
         map.flyTo({
@@ -1630,12 +1631,14 @@ export function DeckScene({
         break;
       case "flyToGlobe":
         flyToGlobeAtRef.current = Date.now();
+        // Pull out to frame the whole UK (not the globe) so the live Starlink
+        // constellation is seen drifting over Britain rather than the world.
         map.flyTo({
-          center: [0, 25],
-          zoom: 1.5,
+          center: [-2.6, 54.7],
+          zoom: 4.7,
           pitch: 0,
           bearing: 0,
-          duration: 3000,
+          duration: 2600,
           essential: true,
         });
         break;
@@ -1789,16 +1792,17 @@ export function DeckScene({
           shownLabels = declutterLabels(map!, landmarksRef.current);
           lastLabelView = vk;
         }
-        // Starlink constellation: only at globe zoom (≤4 full, fading out by zoom 7).
-        let satOpacity = Math.max(0, Math.min(1, (7 - zoom) / 3));
+        // Starlink constellation: full-bright at the UK framing (zoom ≤5), fading out as you
+        // dive toward London (gone by zoom 8) so the dense city view stays uncluttered.
+        let satOpacity = Math.max(0, Math.min(1, (8 - zoom) / 3));
         // If flyToGlobe was just pressed, fade satellites in immediately so they don't pop —
         // blend with the zoom-based opacity and take whichever is higher, until the zoom-out
-        // catches up (≤3) and the zoom-based curve takes over.
+        // settles at the UK framing (≤5.5) and the zoom-based curve takes over.
         if (flyToGlobeAtRef.current !== null) {
           const elapsed = Date.now() - flyToGlobeAtRef.current;
           const fadeIn = Math.min(1, elapsed / 1400);
           satOpacity = Math.max(satOpacity, fadeIn);
-          if (zoom <= 3) flyToGlobeAtRef.current = null;
+          if (zoom <= 5.5) flyToGlobeAtRef.current = null;
         }
         const sats = satOpacity > 0 ? interpolatedPositions(satTracksRef.current, Date.now()) : [];
         overlay.setProps({
