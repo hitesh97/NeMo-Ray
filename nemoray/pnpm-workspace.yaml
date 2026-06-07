@@ -4,3 +4,5 @@ packages:
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver
+  - esbuild
+  - "@vaadin/vaadin-usage-statistics"
