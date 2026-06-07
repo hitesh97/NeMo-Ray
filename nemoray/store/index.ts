@@ -52,6 +52,8 @@ interface NemoState {
   deactivatedSiteIds: SiteId[];
   selectedSiteId: SiteId | null;
   hoveredSiteId: SiteId | null;
+  /** Masts the operator has clicked on the map to reference in the next chat prompt. */
+  referencedSiteIds: SiteId[];
   deadZones: DeadZone[];
   coverageStatus: CoverageStatus;
   proposals: Proposal[];
@@ -60,6 +62,9 @@ interface NemoState {
   setTelemetry(t: CoverageTelemetry | null): void;
   selectSite(id: SiteId | null): void;
   hoverSite(id: SiteId | null): void;
+  /** Add a clicked mast to the chat references, or remove it if already referenced. */
+  toggleReferencedSite(id: SiteId): void;
+  clearReferencedSites(): void;
   deactivateSite(id: SiteId): void;
   reactivateSite(id: SiteId): void;
   toggleSite(id: SiteId): void;
@@ -247,6 +252,7 @@ export const useNemoStore = create<NemoState>((set, get) => ({
   deactivatedSiteIds: [],
   selectedSiteId: null,
   hoveredSiteId: null,
+  referencedSiteIds: [],
   deadZones: [],
   coverageStatus: "idle",
   proposals: [],
@@ -255,6 +261,14 @@ export const useNemoStore = create<NemoState>((set, get) => ({
 
   selectSite: (id) => set({ selectedSiteId: id }),
   hoverSite: (id) => set({ hoveredSiteId: id }),
+
+  toggleReferencedSite: (id) =>
+    set((st) => ({
+      referencedSiteIds: st.referencedSiteIds.includes(id)
+        ? st.referencedSiteIds.filter((s) => s !== id)
+        : [...st.referencedSiteIds, id],
+    })),
+  clearReferencedSites: () => set({ referencedSiteIds: [] }),
 
   deactivateSite: (id) => {
     const { deactivatedSiteIds, sitesById } = get();
@@ -354,14 +368,21 @@ export const useNemoStore = create<NemoState>((set, get) => ({
     ) {
       history.pop();
     }
-    // The action targets: the masts the operator clicked, else the active scenario's
-    // pre-rendered outage — so "simulate the selected masts" acts on the scenario even with
-    // nothing hand-selected (this is the frontend half of the old placeholder-loop fix). The
-    // scenario id rides along too as the backend's fallback selector.
+    // The action targets, in priority order: the masts the operator clicked on the map and
+    // referenced in this chat prompt ("take it down"), else a single hand-selected site, else
+    // the active scenario's pre-rendered outage — so "simulate the selected masts" acts on the
+    // scenario even with nothing referenced. The scenario id rides along too as the backend's
+    // fallback selector. We only consume the chat references on the prompt path when the caller
+    // didn't pass explicit ids, so unrelated auto-triggers (site_down narration, the cuOpt
+    // button) don't steal the operator's staged chips.
     const activeScenario = st.scenarios[st.activeScenarioId];
-    const selectedSiteIds = st.selectedSiteId
-      ? [st.selectedSiteId]
-      : activeScenario.outage?.siteIds;
+    const usingReferenced =
+      !!req.prompt && req.selectedSiteIds === undefined && st.referencedSiteIds.length > 0;
+    const selectedSiteIds = usingReferenced
+      ? st.referencedSiteIds
+      : st.selectedSiteId
+        ? [st.selectedSiteId]
+        : activeScenario.outage?.siteIds;
     const enriched: AgentRequest = {
       ...req,
       history: history.length > 0 ? history : undefined,
@@ -371,6 +392,8 @@ export const useNemoStore = create<NemoState>((set, get) => ({
     // A fresh run starts with a clean map — last turn's highlights are wiped (the new
     // run's tools repaint as they go). Keeps the overlay in sync with the conversation.
     set({ agentTrigger: { req: enriched, nonce: agentNonce }, agentMap: EMPTY_AGENT_MAP });
+    // Once consumed, the chips clear — the references belonged to this prompt.
+    if (usingReferenced) set({ referencedSiteIds: [] });
   },
   clearAgentTrigger: () => set({ agentTrigger: null }),
   applyStreamEvent: (e) =>

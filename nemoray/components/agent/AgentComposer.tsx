@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState, type FormEvent, type KeyboardEvent } from "react";
-import { CornerDownLeft, Loader2, Mic, Volume2, VolumeX } from "lucide-react";
+import { CornerDownLeft, Loader2, Mic, Volume2, VolumeX, X, Zap } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/primitives";
@@ -20,6 +20,9 @@ export function AgentComposer({ className }: { className?: string }) {
   const streaming = useNemoStore((s) => s.streaming);
   const addOperatorMessage = useNemoStore((s) => s.addOperatorMessage);
   const requestAgentRun = useNemoStore((s) => s.requestAgentRun);
+  // Masts the operator clicked on the map — shown as removable chips and sent with the prompt.
+  const referencedSiteIds = useNemoStore((s) => s.referencedSiteIds);
+  const toggleReferencedSite = useNemoStore((s) => s.toggleReferencedSite);
 
   const sendPrompt = useCallback(
     (text: string) => {
@@ -81,10 +84,34 @@ export function AgentComposer({ className }: { className?: string }) {
           ? "Finishing…"
           : transcribing
             ? "Transcribing…"
-            : "Ask the AI agent — type or click the mic…";
+            : referencedSiteIds.length > 0
+              ? "Referenced — try “take it down and replan coverage”…"
+              : "Ask the AI agent — type or click the mic…";
 
   return (
     <div className={cn("shrink-0 border-t border-hairline bg-panel/60", className)}>
+      {referencedSiteIds.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 px-2.5 pt-2">
+          <span className="nm-eyebrow text-[9px] text-ink-faint">Masts</span>
+          {referencedSiteIds.map((id) => (
+            <span
+              key={id}
+              className="flex items-center gap-1 border border-nv/40 bg-nv/10 px-1.5 py-0.5 text-[10px] font-mono text-nv"
+            >
+              <Zap size={10} />
+              {id}
+              <button
+                type="button"
+                aria-label={`Remove ${id}`}
+                onClick={() => toggleReferencedSite(id)}
+                className="ml-0.5 text-nv/70 transition-colors hover:text-nv"
+              >
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <form onSubmit={onSubmit} className="flex items-center gap-2 px-2.5 py-2">
         {available && (
           <button

@@ -63,6 +63,8 @@ import type {
 //   buildings → "buildings"
 //   rays      → "rays"
 //   masts     → "masts-lattice", "masts-dot"          (existing EE)
+//               + "masts-hit" (invisible click target → reference a mast in chat)
+//               + "masts-ref" (pulsing ring on masts referenced in the composer)
 //   proposed  → "newmasts-lattice", "newmasts-dot"    (cuOpt-proposed)
 //   deadzone  → "holes"
 //   coverage  → "coverage"  (the dBm best-server heatmap raster, coverage.png; default off)
@@ -106,6 +108,7 @@ const MAST_WHITE: RGB = [232, 236, 244];
 const MAST_RED: RGB = [226, 58, 53];
 const MAST_DOT_EE: RGB = [40, 130, 255]; // blue beacon → existing EE masts
 const MAST_DOT_NEW: RGB = [255, 200, 60]; // gold beacon → cuOpt-proposed masts
+const MAST_REF_RING: RGB = [255, 120, 40]; // amber ring → mast referenced in the chat composer
 // Screen-space line widths (px) for the lattice members — legs boldest, bracing finest.
 const LATTICE_LEG_W = 2.4;
 const LATTICE_RUNG_W = 1.5;
@@ -242,7 +245,7 @@ interface RayFeature {
 }
 interface MastFeature {
   geometry: { coordinates: number[] };
-  properties: { height_m?: number };
+  properties: { height_m?: number; id?: string };
 }
 interface FC<F> {
   features: F[];
@@ -265,10 +268,12 @@ interface Trip {
   timestamps: number[];
   color: RGB;
 }
-// A sited antenna: ground position and the metres-tall it should render at (`vh`).
+// A sited antenna: ground position, the metres-tall it should render at (`vh`), and the
+// site id (`id`) so a click can reference it back to the network/agent.
 interface Mast {
   pos: Position;
   vh: number;
+  id?: string;
 }
 // A matched service: a pin floating over the coloured footprint. `pos` is the
 // footprint centroid, `h` the building height (so the pin sits just above the roof),
@@ -379,7 +384,7 @@ function toMasts(
     if (!inBounds(lng, lat, bounds)) continue;
     const h = Math.max(f.properties.height_m || 15, 10);
     const vh = proposed ? Math.max(h + 4, 28) : Math.max(h, MIN_TOWER_M);
-    out.push({ pos: [lng, lat], vh });
+    out.push({ pos: [lng, lat], vh, id: f.properties.id });
   }
   return out;
 }
@@ -657,6 +662,63 @@ function buildMastDots(
     lineWidthMinPixels: 1.4,
     getLineColor: [8, 12, 18, 255],
     parameters: { depthCompare: "always" },
+  });
+}
+
+// Invisible oversized click targets over the EE masts: a generous pixel disc on each beacon so
+// the operator can click an antenna to reference it in the chat composer ("take it down"). Only
+// built when the masts layer is visible, so hidden masts aren't clickable. Mirrors the satellite
+// "sat-hit" pattern. `onPick` is read from a ref so the once-built map picks up the latest store
+// callback without remounting.
+function buildMastHits(
+  masts: Mast[],
+  scale: number,
+  onPick: (id: string) => void,
+): ScatterplotLayer<Mast> {
+  return new ScatterplotLayer<Mast>({
+    id: "masts-hit",
+    data: masts,
+    billboard: true,
+    radiusUnits: "pixels",
+    getPosition: (d) => [d.pos[0], d.pos[1], mastTopZ(d.vh)],
+    getRadius: 14 * scale,
+    radiusMinPixels: 10,
+    radiusMaxPixels: 22,
+    getFillColor: [0, 0, 0, 0] as Color,
+    stroked: false,
+    pickable: true,
+    onClick: (info) => {
+      const id = info.object?.id;
+      if (id) onPick(id);
+    },
+    parameters: { depthCompare: "always" },
+  });
+}
+
+// A pulsing amber ring around any mast currently referenced in the chat composer, so the
+// operator's selection reads on the map. `pulse` (0..1) drives the radius/opacity throb.
+function buildMastRefRings(
+  masts: Mast[],
+  referenced: Set<string>,
+  scale: number,
+  pulse: number,
+): ScatterplotLayer<Mast> {
+  const data = masts.filter((m) => m.id && referenced.has(m.id));
+  return new ScatterplotLayer<Mast>({
+    id: "masts-ref",
+    data,
+    billboard: true,
+    radiusUnits: "pixels",
+    getPosition: (d) => [d.pos[0], d.pos[1], mastTopZ(d.vh)],
+    getRadius: (9 + 3 * pulse) * scale,
+    radiusMinPixels: 8,
+    radiusMaxPixels: 26,
+    getFillColor: [0, 0, 0, 0] as Color,
+    stroked: true,
+    lineWidthMinPixels: 2,
+    getLineColor: [...MAST_REF_RING, Math.round(170 + 85 * pulse)] as Color,
+    parameters: { depthCompare: "always" },
+    updateTriggers: { getRadius: pulse, getLineColor: pulse },
   });
 }
 
@@ -1022,6 +1084,9 @@ const EMPTY_DIRECTIVES: AgentMapState = {
   route: null,
   focus: null,
 };
+
+// Stable empty default for the referencedSiteIds prop (avoids a new array each render).
+const EMPTY_REF_IDS: string[] = [];
 
 function bboxRing(b: BBox): Position[] {
   const [w, s, e, n] = b;
@@ -1524,10 +1589,16 @@ export function DeckScene({
   layers,
   directives = EMPTY_DIRECTIVES,
   cameraCommand = null,
+  referencedSiteIds = EMPTY_REF_IDS,
+  onPickMast,
 }: {
   layers: LayerVis;
   directives?: AgentMapState;
   cameraCommand?: CameraCommand | null;
+  /** Mast ids the operator has referenced in the chat composer (drawn with a ring). */
+  referencedSiteIds?: string[];
+  /** Called with a mast id when the operator clicks an antenna on the map. */
+  onPickMast?: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   // The map is built once in an effect that never re-runs; the animate loop reads the
@@ -1544,6 +1615,17 @@ export function DeckScene({
   useEffect(() => {
     directivesRef.current = directives;
   }, [directives]);
+
+  // Referenced masts + the click callback follow the same ref pattern: the map is built once,
+  // so the animate loop reads the latest set/callback through these refs without remounting.
+  const referencedRef = useRef<Set<string>>(new Set(referencedSiteIds));
+  useEffect(() => {
+    referencedRef.current = new Set(referencedSiteIds);
+  }, [referencedSiteIds]);
+  const onPickMastRef = useRef(onPickMast);
+  useEffect(() => {
+    onPickMastRef.current = onPickMast;
+  }, [onPickMast]);
 
   // The live MapLibre map, exposed so the camera/focus effects can drive it (the build
   // effect below is the only writer).
@@ -1801,12 +1883,19 @@ export function DeckScene({
           if (zoom <= 5.5) flyToGlobeAtRef.current = null;
         }
         const sats = satOpacity > 0 ? interpolatedPositions(satTracksRef.current, Date.now()) : [];
+        const refPulse = 0.5 + 0.5 * Math.sin(time * 0.06);
         overlay.setProps({
           layers: [
             ...staticLayers,
             buildRaysLayer(data.trips, time, zoom, L.rays),
+            // Ring referenced masts behind the beacon dots so the selection reads on the map.
+            buildMastRefRings(data.masts, referencedRef.current, scale, refPulse),
             buildMastDots("masts", data.masts, MAST_DOT_EE, scale, L.masts),
             buildMastDots("newmasts", data.newMasts, MAST_DOT_NEW, scale, L.proposed),
+            // Invisible click targets on top of the EE beacons — only when masts are visible.
+            ...(L.masts.visible
+              ? [buildMastHits(data.masts, scale, (id) => onPickMastRef.current?.(id))]
+              : []),
             buildServiceIcons(data.markers, scale, L.services),
             buildServiceLabels(data.markers, nearEnough, L.services, L.labels),
             // Agent-driven highlights (dead zones / COW / located buildings) over the scene

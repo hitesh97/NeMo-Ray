@@ -3,15 +3,13 @@
 import {
   Activity,
   AlertTriangle,
-  FileDown,
   PlugZap,
   Radio,
   Users,
 } from "lucide-react";
 import type { ComponentType } from "react";
-import { useState } from "react";
 
-import { Button, Dialog, Tooltip } from "@/components/primitives";
+import { Tooltip } from "@/components/primitives";
 import { TechStrip } from "@/components/scenario/TechStrip";
 import { cn } from "@/lib/cn";
 import { SCENARIOS, SCENARIO_ORDER } from "@/lib/scenarios";
@@ -58,78 +56,15 @@ function ScenarioSegment({ id }: { id: ScenarioId }) {
   );
 }
 
-/** The scenario selector row: segments + Export Report. */
+/** The scenario selector row: segments + tech strip. */
 export function ScenarioTabs({ className }: { className?: string }) {
-  const [exportOpen, setExportOpen] = useState(false);
-
-  const activeScenarioId = useNemoStore((s) => s.activeScenarioId);
-  const sites = useNemoStore((s) => s.sites);
-  const deadZones = useNemoStore((s) => s.deadZones);
-  const deactivatedCount = useNemoStore((s) => s.deactivatedSiteIds.length);
-  const active = SCENARIOS[activeScenarioId];
-
-  // Real fleet figures for the report summary — no synthetic KPIs.
-  const onAir = sites.filter((s) => s.status === "active").length;
-  const summary = [
-    { label: "Cell towers", value: String(sites.length), critical: false },
-    { label: "On air", value: String(onAir), critical: false },
-    { label: "Offline", value: String(sites.length - onAir), critical: deactivatedCount > 0 },
-    {
-      label: "Critical gaps",
-      value: String(deadZones.filter((d) => d.severity === "critical").length),
-      critical: deadZones.filter((d) => d.severity === "critical").length > 0,
-    },
-  ];
-
   return (
     <div className={cn("flex items-center gap-1.5", className)}>
       {SCENARIO_ORDER.map((id) => (
         <ScenarioSegment key={id} id={id} />
       ))}
 
-      <TechStrip className="ml-4 mr-auto min-w-0" />
-
-      {/* Export Report */}
-      <Dialog
-        open={exportOpen}
-        onOpenChange={setExportOpen}
-        title="Export Report"
-        trigger={
-          <Button variant="outline" size="sm">
-            <FileDown size={12} />
-            Export Report
-          </Button>
-        }
-      >
-        <div className="flex flex-col gap-3">
-          <div className="flex items-baseline justify-between">
-            <span className="nm-eyebrow">Scenario</span>
-            <span className="text-sm font-semibold text-nv">{active.label}</span>
-          </div>
-          <p className="text-xs leading-relaxed text-ink-dim">{active.description}</p>
-
-          <div className="grid grid-cols-2 gap-px border border-hairline bg-hairline">
-            {summary.map((k) => (
-              <div key={k.label} className="flex flex-col gap-0.5 bg-panel-2 px-2.5 py-2">
-                <span className="nm-eyebrow text-ink-faint">{k.label}</span>
-                <span className={cn("nm-readout text-sm", k.critical ? "text-critical" : "text-ink")}>
-                  {k.value}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          <div className="flex items-center justify-between border-t border-hairline pt-3">
-            <span className="nm-readout text-[10px] text-ink-faint">
-              {deactivatedCount} sites offline
-            </span>
-            <Button variant="solid" size="sm" onClick={() => setExportOpen(false)}>
-              <FileDown size={12} />
-              Generate PDF
-            </Button>
-          </div>
-        </div>
-      </Dialog>
+      <TechStrip className="ml-4 min-w-0 flex-1" />
     </div>
   );
 }

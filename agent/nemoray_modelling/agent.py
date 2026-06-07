@@ -119,6 +119,14 @@ def _system_prompt(tools: list[ToolSpec]) -> str:
         "    to restore coverage — (1) optimise new permanent masts with cuOpt, or (2) deploy a",
         "    Cell-on-Wheels with Starlink backhaul?'. Do NOT choose for them and do NOT call",
         "    another tool this turn.",
+        "  • OPERATOR TAKES CLICKED MASTS DOWN — when the operator has SELECTED specific masts on",
+        "    the map (selected_site_ids present) and tells you to take them down ('take it down',",
+        "    'take these offline', 'knock these out'): do the WHOLE response in one shot, no asking —",
+        "    simulate_outage (the selected ids), then run_cuopt for the permanent new-mast plan,",
+        "    then deploy_cow with keep_overlay=true so the Cell-on-Wheels and its coverage circle",
+        "    layer over the dead zone. THEN reply `final`: which buildings lost coverage, cuOpt's",
+        "    recommended mast (gain % + cost, gold on the map), and the COW's source fire station +",
+        "    tow + restoration ETA with its coverage radius now covering the gap.",
         "  • RUN / PLAY a scenario end-to-end ('run this scenario', 'play the outage', 'respond to",
         "    the outage', 'full incident response'): do the WHOLE resilience flow without asking —",
         "    simulate_outage, then deploy_cow with keep_overlay=true (so the dead zone + affected",
@@ -452,6 +460,12 @@ class StubPlanner:
                     "final": f"Highlighted the nearest {kind} on the map."}
         if any(k in low for k in ("down", "offline", "outage", "fail", "break", "lost",
                                   "simulate", "knock out", "take offline")):
+            # The operator clicked specific masts on the map and is taking them down → run the
+            # WHOLE resilience response in one shot (outage → cuOpt permanent plan → Cell-on-
+            # Wheels with its coverage circle, all layered on the map). A bare scenario outage
+            # with nothing hand-picked still stops to ask how to restore (the deliberate UX).
+            if self.selected:
+                return self._full_resilience_script(step, last_obs)
             return self._outage_script(step, last_obs)
         if any(k in low for k in ("cell-on-wheels", "cell on wheels", "cow", "deploy")):
             return self._deploy_script(step, last_obs)
@@ -505,6 +519,27 @@ class StubPlanner:
                     "args": {"lat": cow.get("lat"), "lng": cow.get("lng")}}
         return {"thought": "Summarising the full incident response.",
                 "final": self._scenario_final(last_obs)}
+
+    def _full_resilience_script(self, step: int, last_obs: dict[str, Any]) -> dict[str, Any]:
+        """Operator clicked masts and took them down: the full response in one shot —
+        simulate_outage (re-run coverage with those masts disabled), run_cuopt for the
+        permanent new-mast plan (gold), then deploy_cow with keep_overlay=true so the
+        Cell-on-Wheels and its coverage circle layer over the dead zone instead of wiping it.
+        Ends with a thorough operator summary citing the real figures."""
+        if step == 0:
+            return {"thought": "Taking the selected masts offline and re-running coverage to map the dead zones.",
+                    "action": "simulate_outage",
+                    "args": {"site_ids": self.selected, "scenario": self.scenario}}
+        if step == 1:
+            return {"thought": "Asking cuOpt for the best permanent new-mast placement over the dead zones.",
+                    "action": "run_cuopt", "args": {"dead_zone_ids": []}}
+        if step == 2:
+            return {"thought": "Deploying a Cell-on-Wheels from the nearest fire station to cover the gap now.",
+                    "action": "deploy_cow",
+                    "args": {"disabled_site_ids": self.selected, "scenario": self.scenario,
+                             "keep_overlay": True}}
+        return {"thought": "Summarising the full outage response.",
+                "final": self._full_resilience_final(last_obs)}
 
     def _deploy_script(self, step: int, last_obs: dict[str, Any]) -> dict[str, Any]:
         if step == 0:
@@ -598,6 +633,51 @@ class StubPlanner:
             parts.append(f"It backhauls via {sat} ({last_obs.get('elevation_deg', '?')}° "
                          f"elevation, {last_obs.get('slant_range_km', '?')} km).")
         parts.append("For a permanent fix, ask me to propose new cuOpt masts.")
+        return " ".join(parts)
+
+    def _full_resilience_final(self, last_obs: dict[str, Any]) -> str:
+        """Operator-takedown summary: the outage impact, cuOpt's permanent plan (gold), and the
+        Cell-on-Wheels (with its coverage circle) towed in to cover the gap now — all on the map."""
+        o = self._outage or {}
+        cand = self._candidate or {}
+        c = self._cow or {}
+        r = self._restoration or {}
+        counts = o.get("affected_counts") or {}
+        hit = ", ".join(f"{v} {k}" for k, v in counts.items() if v)
+        dz = o.get("dead_zone_count", "several")
+        parts = [
+            f"Took the selected mast(s) offline — {dz} dead zone(s) opened, cutting coverage to "
+            f"{hit} (highlighted on the map)."
+            if hit else
+            f"Took the selected mast(s) offline — {dz} dead zone(s) opened across the area "
+            "(highlighted on the map)."
+        ]
+        # cuOpt permanent plan (gold candidate).
+        gain = cand.get("coverage_gain_pct")
+        gain_txt = f"+{round(gain * 100)}% coverage" if isinstance(gain, (int, float)) else ""
+        cost = cand.get("est_cost_gbp")
+        cost_txt = f"£{cost:,}" if isinstance(cost, (int, float)) else ""
+        bits = ", ".join(b for b in (gain_txt, cost_txt) if b)
+        if cand:
+            parts.append(
+                f"cuOpt's permanent fix: a new mast at {cand.get('label', 'the recommended site')}"
+                + (f" ({bits})" if bits else "")
+                + " — shown in gold."
+            )
+        # Cell-on-Wheels immediate cover + its coverage circle.
+        station = (c.get("source_station") or {}).get("name", "the nearest fire station")
+        tow = c.get("tow_km", "?")
+        protected = c.get("buildings_protected", "?")
+        radius = c.get("coverage_radius_km")
+        cow = f"Immediate cover: a Cell-on-Wheels towed from {station} ({tow} km"
+        if r:
+            cow += (f", on air in ~{r.get('total_min', '?')} min at traffic "
+                    f"×{r.get('traffic_factor', '?')}")
+        cow += ")"
+        if isinstance(radius, (int, float)):
+            cow += f" — its ~{radius:.1f} km coverage circle now covers the gap"
+        cow += f", re-covering {protected} emergency building(s)."
+        parts.append(cow)
         return " ".join(parts)
 
     def _starlink_final(self, last_obs: dict[str, Any]) -> str:
