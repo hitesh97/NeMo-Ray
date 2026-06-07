@@ -1,5 +1,7 @@
 # NeMo-Ray — EE 4G Coverage & Resilience Digital Twin
 
+![NeMo-Ray overview](media/overview.gif)
+
 GPU-accelerated **radio propagation digital twin** of the UK Emergency Services Network (ESN)
 4G/LTE coverage across Greater London. Physically-based ray tracing models real building
 geometry; an agentic optimise-and-resilience layer powered by Nemotron LLM reasons over outages,
