@@ -34,11 +34,11 @@ export function ToolPipeline({ className }: { className?: string }) {
       />
       <PanelBody className="p-2">
         {recent.length === 0 ? (
-          <div className="grid grid-cols-3 gap-2">
+          <div className="flex flex-col gap-1">
             {GHOST_SLOTS.map((slot) => (
               <div
                 key={slot}
-                className="flex h-[52px] flex-col justify-center gap-1 border border-dashed border-hairline bg-bg/40 px-2.5"
+                className="flex items-center gap-2 border border-dashed border-hairline bg-bg/40 px-2.5 py-1.5"
               >
                 <span className="nm-eyebrow text-[8px] text-ink-faint">SLOT</span>
                 <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
@@ -48,7 +48,7 @@ export function ToolPipeline({ className }: { className?: string }) {
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="flex flex-col gap-1">
             {recent.map((call) => (
               <ToolCard key={call.id} call={call} />
             ))}

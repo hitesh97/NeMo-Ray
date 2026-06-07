@@ -298,3 +298,164 @@ def in_coverage(lat: float, lng: float) -> bool | None:
     if cb is None:
         return None
     return cb["west"] <= lng <= cb["east"] and cb["south"] <= lat <= cb["north"]
+
+
+# ── masts / network elements (the dashboard's tower layer) ───────────────────────
+# The HUD draws the EE/Orange masts (and cuOpt-proposed sites) as 3D towers from these
+# GeoJSON artifacts; this gives the agent the SAME mast inventory so it can answer "how many
+# masts are around X / tell me about mast Y" and frame the camera on them. Best-effort: the
+# artifacts are gitignored pipeline output, so these return () when absent.
+def _raytracing_file(name: str) -> Path | None:
+    root = _repo_root()
+    for rel in (f"nemoray/public/raytracing/{name}", f"out/{name}"):
+        p = root / rel
+        if p.is_file():
+            return p
+    return None
+
+
+def _load_mast_file(name: str, proposed: bool) -> list[dict[str, Any]]:
+    path = _raytracing_file(name)
+    if path is None:
+        return []
+    try:
+        feats = json.loads(path.read_text()).get("features", [])
+    except (OSError, ValueError):
+        return []
+    out: list[dict[str, Any]] = []
+    for f in feats:
+        try:
+            lng, lat = f["geometry"]["coordinates"][:2]
+        except (KeyError, TypeError, ValueError):
+            continue
+        p = f.get("properties", {}) or {}
+        bands = p.get("bands") or []
+        out.append({
+            "id": str(p.get("id", "")),
+            "operator": str(p.get("operator") or ("proposed" if proposed else "EE")),
+            "lat": float(lat),
+            "lng": float(lng),
+            "height_m": p.get("height_m"),
+            "power_dbm": p.get("power_dbm"),
+            "bands": tuple(str(b) for b in bands) if isinstance(bands, list) else (),
+            # cuOpt-proposed masts carry how many dead-zone cells they close.
+            "covers_holes": p.get("covers_holes"),
+            "proposed": proposed,
+        })
+    return out
+
+
+@lru_cache(maxsize=1)
+def load_masts() -> tuple[dict[str, Any], ...]:
+    """Every mast the dashboard shows: the existing EE/Orange sites (`masts.geojson`) plus the
+    cuOpt-proposed new masts (`new_masts.geojson`), each {id, operator, lat, lng, height_m,
+    power_dbm, bands, proposed}. Empty when the (gitignored) artifacts aren't present."""
+    return tuple(_load_mast_file("masts.geojson", False)
+                 + _load_mast_file("new_masts.geojson", True))
+
+
+def mast_by_id(mast_id: str) -> dict[str, Any] | None:
+    """Look up one mast by its exact id (case-insensitive), or None."""
+    if not mast_id:
+        return None
+    key = mast_id.strip().lower()
+    for m in load_masts():
+        if m["id"].lower() == key:
+            return m
+    return None
+
+
+# The simulated network is EE, whose masts the Sitefinder proxy lists under its two
+# constituent legacy brands — so an "EE" operator filter must match these.
+_EE_BRANDS = ("ee", "orange", "t-mobile", "tmobile", "t mobile")
+
+
+def _operator_matches(mast_op: str, query_op: str) -> bool:
+    mo, qo = mast_op.lower(), query_op.lower()
+    if qo in ("ee", "bt", "ee/bt"):  # EE network = Orange + T-Mobile (its constituents)
+        return any(b in mo for b in _EE_BRANDS)
+    return qo in mo
+
+
+def nearby_masts(
+    lat: float,
+    lng: float,
+    radius_km: float = 0.8,
+    *,
+    operator: str | None = None,
+    limit: int = 60,
+) -> list[dict[str, Any]]:
+    """Masts within `radius_km` of a point, nearest first, each carrying `distance_km`.
+    Optionally filter by operator (case-insensitive; 'EE' matches its Orange/T-Mobile masts)."""
+    op = operator.strip() if operator else None
+    out: list[dict[str, Any]] = []
+    for m in load_masts():
+        if op and not _operator_matches(m["operator"], op):
+            continue
+        km = haversine_km(lat, lng, m["lat"], m["lng"])
+        if km <= radius_km:
+            out.append({**m, "distance_km": round(km, 3)})
+    out.sort(key=lambda m: m["distance_km"])
+    return out[:limit]
+
+
+@lru_cache(maxsize=1)
+def load_proposed_masts() -> tuple[dict[str, Any], ...]:
+    """The cuOpt-proposed new masts (the `proposed` subset of the mast inventory) — each with
+    its `covers_holes`. This is the REAL optimiser output the HUD draws as gold towers; the
+    agent's offline cuOpt fixture reads it so it stops inventing a single Westminster site."""
+    return tuple(m for m in load_masts() if m.get("proposed"))
+
+
+# ── real coverage holes (dead zones) + optimiser summary (the HUD heatmap's data) ─────
+def _outer_ring(feature: dict[str, Any]) -> list[list[float]] | None:
+    g = feature.get("geometry") or {}
+    t, c = g.get("type"), g.get("coordinates") or []
+    if t == "Polygon":
+        return c[0] if c else None
+    if t == "MultiPolygon":
+        return c[0][0] if c and c[0] else None
+    return None
+
+
+@lru_cache(maxsize=1)
+def load_hotspots() -> tuple[dict[str, Any], ...]:
+    """The REAL coverage dead zones the pipeline found (`hotspots.geojson` — exactly the holes
+    the dashboard heatmap shows), each {id, centroid:(lng,lat), bbox, severity}. Empty when the
+    (gitignored) artifact isn't present. The agent's offline coverage fixture uses these so it
+    reflects the real multi-zone map instead of two hardcoded Westminster boxes."""
+    path = _raytracing_file("hotspots.geojson")
+    if path is None:
+        return tuple()
+    try:
+        feats = json.loads(path.read_text()).get("features", [])
+    except (OSError, ValueError):
+        return tuple()
+    out: list[dict[str, Any]] = []
+    for i, f in enumerate(feats):
+        ring = _outer_ring(f)
+        if not ring:
+            continue
+        xs = [p[0] for p in ring]
+        ys = [p[1] for p in ring]
+        props = f.get("properties", {}) or {}
+        out.append({
+            "id": props.get("id") or f"dz-{i:02d}",
+            "centroid": (sum(xs) / len(xs), sum(ys) / len(ys)),
+            "bbox": [min(xs), min(ys), max(xs), max(ys)],
+            "severity": props.get("severity", "major"),
+        })
+    return tuple(out)
+
+
+@lru_cache(maxsize=1)
+def load_optimization_summary() -> dict[str, Any]:
+    """The cuOpt run summary (`optimization.json`): existing_masts, coverage_holes, new_masts,
+    solver, status, solve_time_s. Empty dict when absent."""
+    path = _raytracing_file("optimization.json")
+    if path is None:
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}

@@ -1,26 +1,20 @@
 import type { LngLat, Scenario, ScenarioId, ScenarioOutage } from "@/lib/types";
 
-const HOUR = 3600_000;
-
 /**
- * The nominal "live" feed — UI chrome only, no outage. Its timeline stays empty
- * (nominal operations); the incident scenarios below carry a pre-rendered outage.
+ * The nominal "live" feed — UI chrome only, no outage.
  */
 const shell = (id: ScenarioId, label: string, description: string): Scenario => ({
   id,
   label,
   description,
   seedDeactivated: [],
-  events: [],
-  durationMs: 6 * HOUR,
   synthetic: false,
 });
 
 /**
  * A pre-rendered incident: real EE/Orange mast ids (from public/raytracing/masts.geojson,
- * mirrored in the agent's OUTAGE_CATALOG) + the outage epicentre. `events`/`durationMs` are
- * computed at runtime from the current traffic by `useScenarioTimeline`; the static values
- * here are the pre-hydration fallback.
+ * mirrored in the agent's OUTAGE_CATALOG) + the outage epicentre. The traffic-aware
+ * restoration ETA is computed at runtime by `useScenarioTimeline` from the epicentre.
  */
 const incident = (
   id: ScenarioId,
@@ -32,8 +26,6 @@ const incident = (
   label,
   description,
   seedDeactivated: outage.siteIds,
-  events: [],
-  durationMs: HOUR,
   synthetic: true,
   outage,
 });

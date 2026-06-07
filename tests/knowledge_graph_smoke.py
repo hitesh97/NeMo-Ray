@@ -118,7 +118,54 @@ def test_tools_emit_camera_focus() -> None:
     net = r.run("describe_network", {})
     # describe_network frames the simulated area when summary.json is present.
     assert net.observation["source"] in ("pipeline summary.json", "none")
-    print("  tools: locate_place / nearby_places / describe_network all drive the camera")
+
+    masts = r.run("find_masts", {"query": "the shard", "radius_km": 0.5})
+    # masts.geojson is a gitignored pipeline output — present in dev, absent on a fresh clone.
+    if masts.observation["source"] == "masts.geojson":
+        assert masts.observation["count"] >= 1, "no masts found around the Shard"
+        assert _focus(masts), "find_masts should drive the camera"
+    print("  tools: locate_place / nearby_places / describe_network / find_masts drive the camera")
+
+
+def test_cuopt_and_coverage_show_all_not_one() -> None:
+    """Regression for the 'cuOpt/dead-zones point to a single Westminster spot' bug: offline,
+    run_cuopt must emit a marker per proposed mast (the whole plan) and run_sionna_coverage must
+    paint every real hole — when the pipeline artifacts are present."""
+    import os as _os
+
+    from nemoray_modelling import places as _P
+
+    r = ToolRegistry()
+    _os.environ.pop("TWIN_URL", None)
+
+    have_masts = bool(_P.load_proposed_masts())
+    have_holes = bool(_P.load_hotspots())
+
+    cu = r.run("run_cuopt", {})
+    markers = next((a["markers"] for a in cu.ui_actions if a.get("op") == "markers"), [])
+    cands = cu.observation.get("candidates", [])
+    if have_masts:
+        assert len(markers) > 1, f"run_cuopt emitted {len(markers)} marker(s) — expected the full plan"
+        assert len(cands) == len(markers), "observation candidates must match emitted markers"
+        assert cu.observation["source"].startswith("cuOpt output artifact")
+        # Exactly one marker is labelled — the recommended (highest-impact) pick.
+        assert sum(1 for m in markers if m.get("label")) == 1
+        # reject→retry recommends a DIFFERENT mast.
+        pick1 = cu.observation["candidate"]["candidate_id"]
+        cu2 = r.run("run_cuopt", {"exclude": [pick1]})
+        assert cu2.observation["candidate"]["candidate_id"] != pick1, "exclude didn't change the pick"
+        print(f"  run_cuopt: {len(markers)} candidate markers, 1 recommended, exclude reselects")
+    else:
+        print("  run_cuopt: no new_masts.geojson artifact — skipped (fresh clone)")
+
+    cov = r.run("run_sionna_coverage", {"disabled_cells": []})
+    zones = next((a["zones"] for a in cov.ui_actions if a.get("op") == "zones"), [])
+    if have_holes:
+        assert len(zones) > 1, f"run_sionna_coverage painted {len(zones)} zone(s) — expected all holes"
+        assert cov.observation["source"].startswith("coverage artifact")
+        print(f"  run_sionna_coverage: {len(zones)} real dead zones painted")
+    else:
+        print("  run_sionna_coverage: no hotspots.geojson artifact — skipped (fresh clone)")
 
 
 def main() -> int:
@@ -129,6 +176,7 @@ def main() -> int:
         test_every_label_resolves,
         test_nearby_sorted_and_filtered,
         test_tools_emit_camera_focus,
+        test_cuopt_and_coverage_show_all_not_one,
     ]
     failed = 0
     for t in tests:

@@ -1,7 +1,7 @@
-import type { EventMarker, LngLat, RestorationPlan, Scenario } from "@/lib/types";
+import type { LngLat, RestorationPlan } from "@/lib/types";
 
 /**
- * Traffic-aware Cell-on-Wheels restoration model — the timing behind the scenario timeline.
+ * Traffic-aware Cell-on-Wheels restoration model — the RESTORATION ETA readout.
  *
  * A mast outage opens a coverage hole; the nearest fire station tows its garaged COW to the
  * outage, raises the mast and brings the cell (Starlink-backhauled) online. This module
@@ -82,59 +82,3 @@ export function computeRestoration(epicenter: LngLat, now: Date = new Date()): R
   };
 }
 
-const MIN = 60_000;
-
-/**
- * Build the scenario's restoration timeline (events + span) from its outage and the current
- * time. Phases: masts offline → COW dispatched → COW on-site (the traffic-scaled tow) →
- * coverage restored. Returns the {@link RestorationPlan} too, for the ETA readout.
- */
-export function buildScenarioTimeline(
-  scenario: Scenario,
-  now: Date = new Date(),
-): { events: EventMarker[]; durationMs: number; restoration: RestorationPlan } | null {
-  const outage = scenario.outage;
-  if (!outage) return null;
-
-  const r = computeRestoration(outage.epicenter, now);
-  const n = outage.siteIds.length;
-  const tDispatch = r.dispatchMin;
-  const tOnSite = r.dispatchMin + r.driveMin;
-  const tRestored = r.totalMin;
-
-  const events: EventMarker[] = [
-    {
-      id: `${scenario.id}-down`,
-      tMs: 0,
-      kind: "alert",
-      severity: "critical",
-      label: `${n} mast${n === 1 ? "" : "s"} offline — coverage hole opens`,
-      detail: `${scenario.label} · ${outage.severity}`,
-    },
-    {
-      id: `${scenario.id}-dispatch`,
-      tMs: tDispatch * MIN,
-      kind: "agent",
-      label: `COW dispatched · ${r.stationName}`,
-      detail: `+${r.dispatchMin} min muster`,
-    },
-    {
-      id: `${scenario.id}-onsite`,
-      tMs: tOnSite * MIN,
-      kind: "info",
-      label: "COW on-site — raising mast",
-      detail: `${r.driveMin} min tow · traffic ×${r.trafficFactor}`,
-    },
-    {
-      id: `${scenario.id}-restored`,
-      tMs: tRestored * MIN,
-      kind: "failover",
-      label: "Coverage restored",
-      detail: `${r.setupMin} min setup · ${r.totalMin} min total`,
-    },
-  ];
-
-  // Frame the scrubber around the restoration with ~30% headroom, rounded to 5-min, min 30 min.
-  const spanMin = Math.max(30, Math.ceil((tRestored * 1.3) / 5) * 5);
-  return { events, durationMs: spanMin * MIN, restoration: r };
-}

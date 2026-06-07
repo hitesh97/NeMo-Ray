@@ -6,7 +6,6 @@ import {
   PanelHeader,
   PanelBody,
   Readout,
-  Tooltip,
   formatCompact,
 } from "@/components/primitives";
 import { renderedAreaKm2 } from "@/lib/telemetry";
@@ -19,9 +18,9 @@ import { cn } from "@/lib/cn";
  * throughput, the peak VRAM the RT solve used, and GPU utilisation. Everything degrades to
  * an em-dash until the summary loads.
  *
- * Nemotron inference VRAM is shown but not yet wired: the agent backend (DGX-Spark
- * llama-server) doesn't report per-request memory, so there is nothing real to display —
- * see the tooltip. Wire it from the backend rather than fabricating a figure.
+ * Nemotron inference telemetry (VRAM, output token rate) lives in its own
+ * {@link NemotronTelemetryPanel} on the same Stats board — this panel is the Sionna RT
+ * solve only.
  */
 export function RenderTelemetryPanel({ className }: { className?: string }) {
   const t = useTelemetry();
@@ -55,20 +54,6 @@ export function RenderTelemetryPanel({ className }: { className?: string }) {
 
         <div className="flex flex-col gap-3 border-t border-hairline pt-3">
           <Readout label="GPU device" value={device ?? "—"} />
-
-          {/* Nemotron inference VRAM — slot exists, but the agent backend doesn't yet
-              report per-request memory, so there is no real figure to show. */}
-          <div className="flex flex-col gap-2">
-            <Tooltip
-              content="Not yet instrumented — the Nemotron agent backend doesn't report inference VRAM."
-              side="top"
-            >
-              <span className="nm-eyebrow w-fit cursor-default text-ink-faint">
-                Nemotron VRAM · avg
-              </span>
-            </Tooltip>
-            <span className="nm-readout text-sm tabular-nums text-ink-faint">—</span>
-          </div>
         </div>
       </PanelBody>
     </Panel>

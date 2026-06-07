@@ -196,6 +196,7 @@ TOOL_LABELS: dict[str, str] = {
     "locate_place": "Locate Place",
     "nearby_places": "Scan Surroundings",
     "describe_network": "Network Overview",
+    "find_masts": "Find Masts",
 }
 
 
@@ -505,6 +506,37 @@ class ToolRegistry:
             {"type": "object", "properties": {}, "required": []},
             self._describe_network,
         )
+        self._add(
+            "find_masts",
+            "Report the EE/Orange masts (cell towers) the dashboard shows AROUND a place or "
+            "point, or look up ONE mast by id, and frame the camera on them. Give a place name "
+            "('masts near the Shard'), lat/lng, or a mast_id. Returns how many masts, their "
+            "operators, heights and bands. Use for 'how many masts are around X', 'what masts "
+            "cover this area', 'tell me about mast <id>', 'show me the towers near X'.",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Place name to centre on (resolved via the knowledge "
+                        "graph). Omit to use lat/lng, a mast_id, or the last-located point.",
+                    },
+                    "mast_id": {
+                        "type": "string",
+                        "description": "Look up a single mast by its exact id and fly to it.",
+                    },
+                    "lat": {"type": "number", "description": "Centre latitude (if no query)."},
+                    "lng": {"type": "number", "description": "Centre longitude (if no query)."},
+                    "radius_km": {"type": "number", "description": "Search radius (default 0.8)."},
+                    "operator": {
+                        "type": "string",
+                        "description": "Optional operator filter (e.g. 'EE', 'Orange').",
+                    },
+                },
+                "required": [],
+            },
+            self._find_masts,
+        )
 
     def _add(
         self,
@@ -531,6 +563,41 @@ class ToolRegistry:
                 return real
         else:
             _warn_fallback("run_sionna_coverage", "TWIN_URL not set")
+        # Offline fixture: prefer the REAL coverage holes the pipeline wrote (hotspots.geojson —
+        # exactly the dashboard heatmap's dead zones) so we show the true multi-zone map and
+        # paint every hole, instead of two hardcoded Westminster boxes.
+        from .places import load_hotspots
+
+        hs = load_hotspots()
+        if hs:
+            dead_zones = [
+                {"id": h["id"],
+                 "centroid": [round(h["centroid"][0], 5), round(h["centroid"][1], 5)],
+                 "severity": h["severity"]}
+                for h in hs
+            ]
+            zone_dirs = [
+                {"id": h["id"], "bbox": [round(x, 6) for x in h["bbox"]],
+                 "severity": h["severity"]}
+                for h in hs
+            ]
+            zaction: dict[str, Any] = {"op": "zones", "zones": zone_dirs}
+            ub = _union_bbox([h["bbox"] for h in hs])
+            if ub:
+                zaction["focus"] = {"bbox": [round(x, 6) for x in ub], "pitch": 35}
+            return ToolResult(
+                result=f"{len(dead_zones)} dead zones across the simulated area "
+                f"(from the Sionna RT coverage map) — highlighted on the map",
+                observation={
+                    "disabled_cells": disabled,
+                    "dead_zone_count": len(dead_zones),
+                    "dead_zones": dead_zones[:8],
+                    "source": "coverage artifact (hotspots.geojson)",
+                },
+                ui_actions=[{"op": "clear"}, zaction],
+            )
+        # Last-resort scripted holes (no artifact present, e.g. a fresh clone before any run).
+        _warn_fallback("run_sionna_coverage", "hotspots.geojson absent — using scripted zones")
         dead_zones = [
             {"id": "dz-westminster-01", "centroid": [-0.1357, 51.4975], "severity": "critical"},
             {"id": "dz-southbank-02", "centroid": [-0.1145, 51.5045], "severity": "major"},
@@ -611,54 +678,115 @@ class ToolRegistry:
                 return real
         else:
             _warn_fallback("run_cuopt", "TWIN_URL not set")
-        # First call proposes the riverside rooftop; after a rejection, the next
-        # call proposes the cleaner inland alternative.
-        candidates = [
-            {
-                "candidate_id": "cow-westminster-A",
-                "label": "Riverside rooftop, Victoria Embankment",
-                "lat": 51.5012,
-                "lng": -0.1232,
-                "coverage_gain_pct": 0.31,
-                "est_cost_gbp": 84000,
-            },
-            {
-                "candidate_id": "cow-westminster-B",
-                "label": "Rooftop, Marsham Street",
-                "lat": 51.4955,
-                "lng": -0.1330,
-                "coverage_gain_pct": 0.27,
-                "est_cost_gbp": 78000,
-            },
-        ]
-        pick = next((c for c in candidates if c["candidate_id"] not in exclude), candidates[-1])
+        # Offline fixture: prefer the REAL cuOpt plan the pipeline wrote (new_masts.geojson) so
+        # the agent shows the genuine many-mast set, not a single invented Westminster site.
+        candidates = self._cuopt_candidates_from_artifact()
+        source = "cuOpt output artifact (new_masts.geojson)"
+        if not candidates:
+            _warn_fallback("run_cuopt", "new_masts.geojson absent — using scripted candidates")
+            source = "fixture"
+            # First call proposes the riverside rooftop; after a rejection, the cleaner inland one.
+            candidates = [
+                {"candidate_id": "cow-westminster-A",
+                 "label": "Riverside rooftop, Victoria Embankment",
+                 "lat": 51.5012, "lng": -0.1232,
+                 "coverage_gain_pct": 0.31, "est_cost_gbp": 84000},
+                {"candidate_id": "cow-westminster-B",
+                 "label": "Rooftop, Marsham Street",
+                 "lat": 51.4955, "lng": -0.1330,
+                 "coverage_gain_pct": 0.27, "est_cost_gbp": 78000},
+            ]
+        avail = [c for c in candidates if c["candidate_id"] not in exclude] or candidates
+        pick = max(avail, key=lambda c: c.get("covers_holes") or 0)
+        n = len(candidates)
         return ToolResult(
-            result=f"Best candidate: {pick['label']} "
-            f"(+{round(pick['coverage_gain_pct'] * 100)}% coverage, "
+            result=f"cuOpt proposes {n} new mast(s) to fill the dead zones; recommended: "
+            f"{pick['label']} (+{round(pick['coverage_gain_pct'] * 100)}% coverage, "
             f"£{pick['est_cost_gbp']:,})",
-            observation={"candidate": pick, "source": "fixture"},
-            ui_actions=self._candidate_ui(pick),
+            observation={
+                "candidate": pick,
+                "candidates": self._lean_candidates(candidates),
+                "candidate_count": n,
+                "source": source,
+            },
+            ui_actions=self._candidates_ui(candidates, pick),
         )
 
     @staticmethod
-    def _candidate_ui(pick: dict[str, Any]) -> list[dict[str, Any]]:
-        """Map directive for a cuOpt candidate: a gold 'proposal' marker (the recommended new
-        mast / COW site) the camera flies to. cuOpt + Nemotron pick this spot."""
-        gain = round((pick.get("coverage_gain_pct") or 0) * 100)
-        marker = {
-            "id": str(pick.get("candidate_id", "cuopt-candidate")),
-            "position": [pick["lng"], pick["lat"]],
-            "kind": "proposal",
-            "label": pick.get("label", "Proposed mast"),
-            "detail": f"+{gain}% coverage",
-        }
-        return [{
-            "op": "markers", "markers": [marker],
-            "focus": {"center": [pick["lng"], pick["lat"]], "zoom": 14.5, "pitch": 45},
-        }]
+    def _candidates_ui(
+        candidates: list[dict[str, Any]], pick: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Map directive for a cuOpt run: a gold 'proposal' marker for EVERY candidate mast (the
+        full optimiser plan), the recommended pick labelled, and the camera framed over the whole
+        set. (Previously only the single pick was shown, which read as 'cuOpt picks one spot'
+        even though it places many — the bug this fixes.)"""
+        pick_id = pick.get("candidate_id")
+        markers: list[dict[str, Any]] = []
+        for i, c in enumerate(candidates):
+            is_pick = c.get("candidate_id") == pick_id
+            marker: dict[str, Any] = {
+                "id": str(c.get("candidate_id", f"cand-{i}")),
+                "position": [c["lng"], c["lat"]],
+                "kind": "proposal",
+            }
+            if is_pick:
+                gain = round((c.get("coverage_gain_pct") or 0) * 100)
+                marker["label"] = c.get("label", "Recommended mast")
+                marker["detail"] = f"+{gain}% coverage · recommended"
+            markers.append(marker)
+        lngs = [c["lng"] for c in candidates]
+        lats = [c["lat"] for c in candidates]
+        if len(candidates) > 1:
+            pad = 0.004
+            focus: dict[str, Any] = {
+                "bbox": [round(min(lngs) - pad, 6), round(min(lats) - pad, 6),
+                         round(max(lngs) + pad, 6), round(max(lats) + pad, 6)],
+                "pitch": 40,
+            }
+        else:
+            focus = {"center": [pick["lng"], pick["lat"]], "zoom": 14.5, "pitch": 45}
+        return [{"op": "markers", "markers": markers, "focus": focus}]
+
+    @staticmethod
+    def _lean_candidates(
+        candidates: list[dict[str, Any]], cap: int = 60
+    ) -> list[dict[str, Any]]:
+        """Compact candidate list for the HUD's Optimiser panel (and a lean LLM observation) —
+        just the fields a Proposal card needs."""
+        return [
+            {"candidate_id": c.get("candidate_id"), "label": c.get("label"),
+             "lat": c["lat"], "lng": c["lng"],
+             "coverage_gain_pct": c.get("coverage_gain_pct"),
+             "est_cost_gbp": c.get("est_cost_gbp"), "covers_holes": c.get("covers_holes")}
+            for c in candidates[:cap]
+        ]
 
     # Per-COW capex placeholder until a real cost model lands — the twin returns no cost.
     _COW_COST_GBP = 80000
+
+    def _cuopt_candidates_from_artifact(self) -> list[dict[str, Any]]:
+        """Build cuOpt candidates from the pipeline's real optimiser output (new_masts.geojson +
+        optimization.json) — the genuine multi-mast plan — for the offline fixture, so the agent
+        stops inventing a single Westminster site when the live twin is down."""
+        from .places import load_optimization_summary, load_proposed_masts
+
+        masts = load_proposed_masts()
+        if not masts:
+            return []
+        total = max(int(load_optimization_summary().get("coverage_holes") or len(masts)), 1)
+        out: list[dict[str, Any]] = []
+        for m in masts:
+            covers = int(m.get("covers_holes") or 1)
+            cid = m["id"]
+            out.append({
+                "candidate_id": cid,
+                "label": f"Proposed mast {cid} — covers {covers} dead-zone cell(s)",
+                "lat": m["lat"], "lng": m["lng"],
+                "coverage_gain_pct": round(covers / total, 3),
+                "est_cost_gbp": self._COW_COST_GBP,
+                "covers_holes": covers,
+            })
+        return out
 
     def _cuopt_via_twin(self, twin: str, exclude: set[str]) -> ToolResult | None:
         """Drive the real coverage-twin over HTTP and map its cuOpt proposals into the same
@@ -702,7 +830,8 @@ class ToolRegistry:
             _warn_fallback("run_cuopt", "twin returned no candidate masts")
             return None
 
-        pick = next((c for c in candidates if c["candidate_id"] not in exclude), candidates[-1])
+        avail = [c for c in candidates if c["candidate_id"] not in exclude] or candidates
+        pick = max(avail, key=lambda c: c.get("covers_holes") or 0)
         status = summary.get("status", "?")
         bits = [f"cuOpt {status}: {len(candidates)} candidate mast(s)"]
         if summary.get("solve_time_s") is not None:
@@ -710,14 +839,16 @@ class ToolRegistry:
         if summary.get("verified"):
             bits.append(f"RT-verified, {summary.get('served_pct_after')}% served after")
         return ToolResult(
-            result=f"Best: {pick['label']} ({'; '.join(bits)})",
+            result=f"cuOpt proposes {len(candidates)} new mast(s); recommended: {pick['label']} "
+            f"({'; '.join(bits)})",
             observation={
                 "candidate": pick,
-                "candidates": candidates,
+                "candidates": self._lean_candidates(candidates),
+                "candidate_count": len(candidates),
                 "summary": summary,
                 "source": "cuOpt (NVIDIA hosted MILP) via coverage-twin",
             },
-            ui_actions=self._candidate_ui(pick),
+            ui_actions=self._candidates_ui(candidates, pick),
         )
 
     # Cached EA-LiDAR backend (loaded once per run; rasters are ~16 MB each).
@@ -1481,6 +1612,107 @@ class ToolRegistry:
                 "buildings": buildings, "simulated_cells": cells, "ray_paths": rays,
                 "performance": perf or None, "coverage_bounds": cb,
                 "source": "pipeline summary.json",
+            },
+            ui_actions=ui,
+        )
+
+    def _find_masts(self, args: dict[str, Any]) -> ToolResult:
+        """Masts around a place/point (or one mast by id), framed on the map. Reads the same
+        masts.geojson / new_masts.geojson the HUD draws its towers from — so the agent answers
+        from exactly the operator's mast inventory. The masts are already drawn as 3D towers, so
+        this drives the camera (no extra markers) and reports the counts/operators/heights."""
+        from .places import load_masts, mast_by_id, nearby_masts, resolve_place
+
+        if not load_masts():
+            _warn_fallback("find_masts", "masts.geojson not present (pipeline output missing)")
+            return ToolResult(
+                result="No mast data is loaded yet — run the coverage pipeline first.",
+                observation={"error": "no masts", "source": "none"},
+            )
+
+        # Single-mast lookup: fly straight to it.
+        mid = (args.get("mast_id") or "").strip()
+        if mid:
+            m = mast_by_id(mid)
+            if m is None:
+                return ToolResult(
+                    result=f"No mast with id '{mid}' in the network.",
+                    observation={"error": "unknown mast", "mast_id": mid},
+                )
+            bands = ", ".join(m["bands"]) or "n/a"
+            ht = f"{m['height_m']:.0f} m" if m["height_m"] is not None else "unknown height"
+            tag = "proposed" if m["proposed"] else m["operator"]
+            ui = [{"op": "focus",
+                   "focus": {"center": [m["lng"], m["lat"]], "zoom": 16.5, "pitch": 50}}]
+            return ToolResult(
+                result=f"Mast {m['id']} ({tag}) — {ht}, band(s) {bands}. Framed on the map.",
+                observation={"mast": {k: m[k] for k in
+                                      ("id", "operator", "height_m", "power_dbm", "bands",
+                                       "proposed")},
+                             "position": {"lat": m["lat"], "lng": m["lng"]},
+                             "source": "masts.geojson"},
+                ui_actions=ui,
+            )
+
+        # Area query: resolve a centre, count the masts around it.
+        query = (args.get("query") or args.get("near") or "").strip()
+        center_name = None
+        if query:
+            node = resolve_place(query)
+            if node is None:
+                return ToolResult(
+                    result=f"Couldn't find '{query}' to scan for masts.",
+                    observation={"error": "unresolved", "query": query},
+                )
+            lat, lng, center_name = float(node["lat"]), float(node["lng"]), node["name"]
+        else:
+            lat, lng = args.get("lat"), args.get("lng")
+            if lat is None or lng is None:
+                ref = self._last_cow or {}
+                lat = ref.get("lat", self._DEFAULT_REF[0])
+                lng = ref.get("lng", self._DEFAULT_REF[1])
+                center_name = ref.get("label") or "central London"
+            lat, lng = float(lat), float(lng)
+
+        radius = float(args.get("radius_km") or 0.8)
+        operator = args.get("operator")
+        masts = nearby_masts(lat, lng, radius, operator=operator)
+        anchor = center_name or f"({lat:.4f}, {lng:.4f})"
+        if not masts:
+            opnote = f" {operator}" if operator else ""
+            return ToolResult(
+                result=f"No{opnote} masts within {radius:.1f} km of {anchor}.",
+                observation={"center": {"lat": lat, "lng": lng}, "radius_km": radius,
+                             "count": 0, "masts": [], "source": "masts.geojson"},
+            )
+        ops: dict[str, int] = {}
+        for m in masts:
+            ops[m["operator"]] = ops.get(m["operator"], 0) + 1
+        heights = [m["height_m"] for m in masts if m["height_m"] is not None]
+        tallest = max(heights) if heights else None
+        # Frame the cluster (masts already render as towers — just move the camera).
+        lngs = [lng] + [m["lng"] for m in masts]
+        lats = [lat] + [m["lat"] for m in masts]
+        pad = 0.0025
+        bbox = [min(lngs) - pad, min(lats) - pad, max(lngs) + pad, max(lats) + pad]
+        ui = [{"op": "focus", "focus": {"bbox": [round(x, 6) for x in bbox], "pitch": 40}}]
+        op_bits = ", ".join(f"{n} {o}" for o, n in sorted(ops.items(), key=lambda kv: -kv[1]))
+        tall_bit = f", tallest {tallest:.0f} m" if tallest is not None else ""
+        return ToolResult(
+            result=f"{len(masts)} mast(s) within {radius:.1f} km of {anchor} "
+            f"({op_bits}{tall_bit}) — framed on the map.",
+            observation={
+                "center": {"name": center_name, "lat": round(lat, 6), "lng": round(lng, 6)},
+                "radius_km": radius,
+                "count": len(masts),
+                "operators": ops,
+                "tallest_m": tallest,
+                "masts": [
+                    {"id": m["id"], "operator": m["operator"], "height_m": m["height_m"],
+                     "bands": list(m["bands"]), "distance_m": round(m["distance_km"] * 1000)}
+                    for m in masts[:8]
+                ],
+                "source": "masts.geojson",
             },
             ui_actions=ui,
         )

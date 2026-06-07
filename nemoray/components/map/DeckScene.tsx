@@ -86,8 +86,8 @@ const BUILDING_TALL: RGB = [150, 166, 192];
 const BUILDING_HEIGHT_REF = 95; // metres at which the gradient saturates
 const GROUND_COLOR = "#0c1119"; // subtle dark blue-grey ground tint
 const LOAD_GREEN: RGB = [43, 214, 118]; // low load
-const LOAD_YELLOW: RGB = [255, 196, 72]; // mid load
-const LOAD_RED: RGB = [255, 78, 68]; // high load
+const LOAD_YELLOW: RGB = [255, 225, 107]; // mid load (lightest of the three)
+const LOAD_RED: RGB = [192, 57, 43]; // high load (dimmed brick red, was [255,78,68])
 const HOLE_COLOR: RGB = [255, 70, 70];
 const MATERIAL = {
   ambient: 0.1,

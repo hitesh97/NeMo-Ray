@@ -127,6 +127,84 @@ def health() -> dict[str, Any]:
     }
 
 
+def _gpu_snapshot() -> dict[str, Any]:
+    """Sample the DGX Spark GPU (device, memory, utilisation) for the HUD Stats board.
+
+    Tries NVML (precise) first, then falls back to parsing `nvidia-smi`. Returns `None`
+    fields with `source="unavailable"` when neither works (no GPU / driver) — the HUD then
+    shows em-dashes rather than a fabricated figure. On the Spark's unified memory the
+    figures are whole-device (the box runs the twin + Nemotron together), which is what we
+    want to surface as "GPU memory in use".
+    """
+    # 1) NVML (pynvml) — exact bytes + name straight from the driver.
+    try:
+        import pynvml  # type: ignore
+
+        pynvml.nvmlInit()
+        try:
+            h = pynvml.nvmlDeviceGetHandleByIndex(0)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(h)
+            util = pynvml.nvmlDeviceGetUtilizationRates(h)
+            name = pynvml.nvmlDeviceGetName(h)
+            if isinstance(name, bytes):
+                name = name.decode()
+            return {
+                "device": name,
+                "vram_used_mib": round(mem.used / 1024 / 1024),
+                "vram_total_mib": round(mem.total / 1024 / 1024),
+                "gpu_util_pct": int(util.gpu),
+                "source": "nvml",
+            }
+        finally:
+            pynvml.nvmlShutdown()
+    except Exception:  # noqa: BLE001 — fall through to nvidia-smi
+        pass
+
+    # 2) nvidia-smi — parse the CSV query.
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.used,memory.total,utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            name, used, total, util = (c.strip() for c in out.stdout.strip().splitlines()[0].split(","))
+            return {
+                "device": name,
+                "vram_used_mib": int(float(used)),
+                "vram_total_mib": int(float(total)),
+                "gpu_util_pct": int(float(util)),
+                "source": "nvidia-smi",
+            }
+    except Exception:  # noqa: BLE001 — report unavailable below
+        pass
+
+    return {
+        "device": None,
+        "vram_used_mib": None,
+        "vram_total_mib": None,
+        "gpu_util_pct": None,
+        "source": "unavailable",
+    }
+
+
+@app.get("/gpu")
+def gpu() -> dict[str, Any]:
+    """Live Nemotron inference telemetry for the HUD Stats board: the served model plus a
+    DGX Spark GPU snapshot (VRAM used / total, utilisation). The output-token rate is
+    measured on the HUD side from the SSE stream, so it isn't reported here."""
+    snap = _gpu_snapshot()
+    snap["model"] = os.getenv("NEMOTRON_MODEL", NEMOTRON_MODEL)
+    return snap
+
+
 _SAT_CACHE: dict[str, Any] = {"ts": None, "sats": None}
 
 

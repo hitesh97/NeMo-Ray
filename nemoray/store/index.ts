@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { delay } from "@/lib/api/client";
 import { type VadState } from "@/hooks/useVoice";
 import type { AgentRequest } from "@/lib/api/agent";
+import { lngLatToNorm } from "@/lib/geo/bbox";
 import { DEFAULT_LAYERS } from "@/lib/layers";
 import { DEFAULT_SCENARIO, SCENARIOS, scenarioFromText } from "@/lib/scenarios";
 import type {
@@ -17,10 +18,10 @@ import type {
   CoverageStatus,
   CoverageTelemetry,
   DeadZone,
-  EventMarker,
   LayerId,
   LayerState,
   LeftRailTab,
+  NemotronTelemetry,
   Proposal,
   ProposalStatus,
   RestorationPlan,
@@ -29,7 +30,6 @@ import type {
   ScenarioId,
   Site,
   SiteId,
-  TimelineMode,
   ToolCall,
   Workspace,
 } from "@/lib/types";
@@ -71,23 +71,11 @@ interface NemoState {
   toggleLayer(id: LayerId): void;
   setLayerOpacity(id: LayerId, opacity: number): void;
 
-  // ── timeline ──
-  timelineMode: TimelineMode;
-  positionMs: number;
-  durationMs: number;
-  playing: boolean;
-  speed: number;
-  events: EventMarker[];
+  // ── restoration (traffic-aware COW ETA for the active scenario's outage) ──
   /** Traffic-aware restoration estimate for the active scenario's outage (null when nominal). */
   restoration: RestorationPlan | null;
-  play(): void;
-  pause(): void;
-  seek(ms: number): void;
-  setLive(): void;
-  setSpeed(n: number): void;
-  tick(dtMs: number): void;
-  /** Replace the timeline + restoration plan (computed by useScenarioTimeline). */
-  setTimeline(events: EventMarker[], durationMs: number, restoration: RestorationPlan | null): void;
+  /** Set/clear the restoration plan (computed by useScenarioTimeline on scenario change). */
+  setRestoration(plan: RestorationPlan | null): void;
 
   // ── agent ──
   messages: AgentMessage[];
@@ -100,6 +88,12 @@ interface NemoState {
   clearAgentTrigger(): void;
   applyStreamEvent(e: AgentStreamEvent): void;
   resetConversation(): void;
+
+  // ── nemotron inference telemetry (Stats board) ──
+  /** Live Nemotron VRAM/util/device + output-token-rate; null fields until measured. */
+  nemotron: NemotronTelemetry;
+  /** Merge a GPU sample polled from the Spark backend (`/api/agent/gpu`). */
+  setNemotronGpu(p: Partial<NemotronTelemetry>): void;
 
   // ── agent-driven map highlights (map_action directives) ──
   agentMap: AgentMapState;
@@ -139,6 +133,27 @@ interface NemoState {
 
 let agentNonce = 0;
 let cameraNonce = 0;
+
+// ── nemotron output-token-rate measurement ──
+// We measure the agent's generation throughput client-side from the SSE token stream
+// (one `token` frame ≈ one model token). These module-scoped counters track the active
+// agent generation so applyStreamEvent can derive a live tok/s without storing scratch
+// state in the store. `runIsAgent` gates them so a `system` message (e.g. the no-backend
+// notice) doesn't pollute the figure.
+let runStartMs = 0;
+let runTokens = 0;
+let runIsAgent = false;
+
+const EMPTY_NEMOTRON: NemotronTelemetry = {
+  device: null,
+  model: null,
+  vramUsedMib: null,
+  vramTotalMib: null,
+  gpuUtilPct: null,
+  outputTokPerSec: null,
+  peakTokPerSec: null,
+  lastOutputTokens: null,
+};
 
 // ── agent-driven map highlights ──
 const EMPTY_AGENT_MAP: AgentMapState = {
@@ -181,6 +196,35 @@ function reduceAgentMap(prev: AgentMapState, a: MapAction): AgentMapState {
   }
 }
 
+// Map the run_cuopt tool's observation (its full candidate list) into Proposal cards for the
+// Optimiser panel — so the panel shows the WHOLE optimiser plan (e.g. 53 masts), not nothing.
+// Returns null if the observation carries no candidates (then the panel is left unchanged).
+function proposalsFromCuopt(data: Record<string, unknown> | undefined): Proposal[] | null {
+  const cands = data?.candidates;
+  if (!Array.isArray(cands) || cands.length === 0) return null;
+  return cands.map((raw, i) => {
+    const c = raw as Record<string, unknown>;
+    const lng = Number(c.lng);
+    const lat = Number(c.lat);
+    const position: LngLat = [lng, lat];
+    const covers = c.covers_holes;
+    return {
+      id: String(c.candidate_id ?? `cand-${i}`),
+      label: String(c.label ?? "Proposed mast"),
+      position,
+      placement: lngLatToNorm(position),
+      // The agent sends coverage gain as a fraction (0.31); the card renders a percent.
+      coverageGainPct: Number(c.coverage_gain_pct ?? 0) * 100,
+      estCostGbp: Number(c.est_cost_gbp ?? 0),
+      rationale:
+        covers != null
+          ? `cuOpt-proposed site — closes ${covers} dead-zone cell(s).`
+          : "cuOpt-proposed mast site.",
+      status: "proposed" as ProposalStatus,
+    };
+  });
+}
+
 export const useNemoStore = create<NemoState>((set, get) => ({
   // ── scenario ──
   activeScenarioId: DEFAULT_SCENARIO,
@@ -191,11 +235,6 @@ export const useNemoStore = create<NemoState>((set, get) => ({
       activeScenarioId: id,
       deactivatedSiteIds: scenario.seedDeactivated,
       selectedSiteId: null,
-      events: scenario.events,
-      durationMs: scenario.durationMs,
-      positionMs: scenario.durationMs,
-      timelineMode: "live",
-      playing: false,
       // Cleared here; useScenarioTimeline recomputes it for the new scenario's outage.
       restoration: null,
     });
@@ -272,32 +311,9 @@ export const useNemoStore = create<NemoState>((set, get) => ({
       layers: { ...st.layers, [id]: { ...st.layers[id], opacity } },
     })),
 
-  // ── timeline ──
-  timelineMode: "live",
-  positionMs: SCENARIOS[DEFAULT_SCENARIO].durationMs,
-  durationMs: SCENARIOS[DEFAULT_SCENARIO].durationMs,
-  playing: false,
-  speed: 1,
-  events: SCENARIOS[DEFAULT_SCENARIO].events,
+  // ── restoration (traffic-aware COW ETA for the active scenario's outage) ──
   restoration: null,
-  play: () => set({ playing: true, timelineMode: "playback" }),
-  pause: () => set({ playing: false }),
-  seek: (ms) =>
-    set((st) => ({
-      positionMs: Math.max(0, Math.min(st.durationMs, ms)),
-      timelineMode: "playback",
-    })),
-  setLive: () => set((st) => ({ timelineMode: "live", playing: false, positionMs: st.durationMs })),
-  setSpeed: (n) => set({ speed: n }),
-  tick: (dtMs) =>
-    set((st) => {
-      if (!st.playing) return {};
-      const next = st.positionMs + dtMs * st.speed;
-      if (next >= st.durationMs) return { positionMs: st.durationMs, playing: false, timelineMode: "live" };
-      return { positionMs: next };
-    }),
-  setTimeline: (events, durationMs, restoration) =>
-    set({ events, durationMs, positionMs: durationMs, timelineMode: "live", playing: false, restoration }),
+  setRestoration: (plan) => set({ restoration: plan }),
 
   // ── agent ──
   messages: [],
@@ -361,6 +377,13 @@ export const useNemoStore = create<NemoState>((set, get) => ({
     set((st) => {
       switch (e.type) {
         case "message_start":
+          // Begin measuring output throughput for an agent generation (system notices
+          // don't count). Counters live in module scope; the figure lands in `nemotron`.
+          runIsAgent = e.role === "agent";
+          if (runIsAgent) {
+            runStartMs = Date.now();
+            runTokens = 0;
+          }
           return {
             streaming: true,
             activeMessageId: e.id,
@@ -369,12 +392,26 @@ export const useNemoStore = create<NemoState>((set, get) => ({
               { id: e.id, role: e.role, content: "", streaming: true, createdAt: Date.now() },
             ],
           };
-        case "token":
+        case "token": {
+          const messages = st.messages.map((m) =>
+            m.id === st.activeMessageId ? { ...m, content: m.content + e.text } : m,
+          );
+          if (!runIsAgent) return { messages };
+          // One token frame ≈ one model token. Derive a live tok/s and track the peak.
+          runTokens += 1;
+          const elapsedS = (Date.now() - runStartMs) / 1000;
+          const rate = elapsedS > 0 ? runTokens / elapsedS : null;
           return {
-            messages: st.messages.map((m) =>
-              m.id === st.activeMessageId ? { ...m, content: m.content + e.text } : m,
-            ),
+            messages,
+            nemotron: {
+              ...st.nemotron,
+              lastOutputTokens: runTokens,
+              outputTokPerSec: rate,
+              peakTokPerSec:
+                rate !== null ? Math.max(rate, st.nemotron.peakTokPerSec ?? 0) : st.nemotron.peakTokPerSec,
+            },
           };
+        }
         case "reasoning":
           return {
             messages: st.messages.map((m) =>
@@ -392,19 +429,51 @@ export const useNemoStore = create<NemoState>((set, get) => ({
                 : m,
             ),
           };
-        case "tool_update":
-          return {
+        case "tool_update": {
+          const next: Partial<NemoState> = {
             toolCalls: st.toolCalls.map((t) => (t.id === e.id ? { ...t, ...e.patch } : t)),
           };
+          // When cuOpt finishes, hydrate the Optimiser panel from its candidate list so the
+          // panel shows the full proposed-mast plan instead of "No proposals".
+          const tool = st.toolCalls.find((t) => t.id === e.id);
+          if (tool?.name === "run_cuopt" && e.patch.data) {
+            const proposals = proposalsFromCuopt(e.patch.data);
+            if (proposals) next.proposals = proposals;
+          }
+          return next;
+        }
         case "map_action":
           // A tool (or the agent) drove the map — fold the directive into the overlay.
           return { agentMap: reduceAgentMap(st.agentMap, e.action) };
-        case "message_end":
+        case "message_end": {
+          // Finalise the run's throughput from the full generation (total tokens / total
+          // wall time) so the readout settles on an accurate figure once streaming stops.
+          const finalize =
+            runIsAgent && runTokens > 0 && runStartMs > 0
+              ? (() => {
+                  const elapsedS = (Date.now() - runStartMs) / 1000;
+                  const rate = elapsedS > 0 ? runTokens / elapsedS : st.nemotron.outputTokPerSec;
+                  return {
+                    nemotron: {
+                      ...st.nemotron,
+                      lastOutputTokens: runTokens,
+                      outputTokPerSec: rate,
+                      peakTokPerSec:
+                        rate !== null
+                          ? Math.max(rate, st.nemotron.peakTokPerSec ?? 0)
+                          : st.nemotron.peakTokPerSec,
+                    },
+                  };
+                })()
+              : {};
+          runIsAgent = false;
           return {
+            ...finalize,
             streaming: false,
             activeMessageId: null,
             messages: st.messages.map((m) => (m.id === e.id ? { ...m, streaming: false } : m)),
           };
+        }
         case "error":
           return {
             streaming: false,
@@ -420,6 +489,10 @@ export const useNemoStore = create<NemoState>((set, get) => ({
     }),
   resetConversation: () =>
     set({ messages: [], toolCalls: [], streaming: false, activeMessageId: null, agentMap: EMPTY_AGENT_MAP }),
+
+  // ── nemotron inference telemetry ──
+  nemotron: EMPTY_NEMOTRON,
+  setNemotronGpu: (p) => set((st) => ({ nemotron: { ...st.nemotron, ...p } })),
 
   // ── agent-driven map highlights ──
   agentMap: EMPTY_AGENT_MAP,
@@ -474,6 +547,7 @@ export const useNemoStore = create<NemoState>((set, get) => ({
 // ── convenience selector hooks ──
 export const useSites = () => useNemoStore((s) => s.sites);
 export const useTelemetry = () => useNemoStore((s) => s.telemetry);
+export const useNemotron = () => useNemoStore((s) => s.nemotron);
 export const useSelectedSite = () =>
   useNemoStore((s) => (s.selectedSiteId ? s.sitesById[s.selectedSiteId] : null));
 export const usePanels = () => useNemoStore((s) => s.panels);

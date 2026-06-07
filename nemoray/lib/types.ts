@@ -70,32 +70,13 @@ export interface DeadZone {
 
 export type CoverageStatus = "idle" | "computing" | "ready" | "error";
 
-// ── scenarios + timeline ────────────────────────────────────────────────────
+// ── scenarios ───────────────────────────────────────────────────────────────
 export type ScenarioId =
   | "live"
   | "high-demand"
   | "major-event"
   | "infrastructure-loss"
   | "power-outage";
-
-export type EventKind =
-  | "alert"
-  | "failover"
-  | "congestion"
-  | "optimisation"
-  | "agent"
-  | "info";
-
-export interface EventMarker {
-  id: string;
-  tMs: number;
-  kind: EventKind;
-  label: string;
-  severity?: "info" | "warning" | "critical";
-  siteId?: SiteId;
-  /** Optional secondary line (e.g. "14 min · traffic ×1.3") shown in tooltips/track rows. */
-  detail?: string;
-}
 
 /** A scenario's pre-rendered outage: the masts that go down and where the hole opens. */
 export interface ScenarioOutage {
@@ -112,15 +93,10 @@ export interface Scenario {
   description: string;
   /** Sites that begin deactivated in this scenario. */
   seedDeactivated: SiteId[];
-  events: EventMarker[];
-  /** Timeline span in ms. */
-  durationMs: number;
   synthetic: boolean;
   /** Pre-rendered outage this scenario simulates (absent for the nominal "live" feed). */
   outage?: ScenarioOutage;
 }
-
-export type TimelineMode = "live" | "playback";
 
 /**
  * Traffic-aware Cell-on-Wheels restoration estimate for a scenario's outage. Computed by
@@ -168,7 +144,8 @@ export type ToolName =
   | "find_nearest"
   | "locate_place"
   | "nearby_places"
-  | "describe_network";
+  | "describe_network"
+  | "find_masts";
 
 export type ToolStatus = "queued" | "running" | "success" | "error";
 
@@ -402,4 +379,30 @@ export type Workspace =
 /** Which panel the left rail is showing (context side). */
 export type LeftRailTab = "network" | "scenarios";
 /** Which panel the right rail is showing (action side). */
-export type RightRailTab = "chat" | "cuopt" | "stats";
+export type RightRailTab = "chat" | "stats";
+
+/**
+ * Live Nemotron inference telemetry shown on the Stats board. VRAM/util/device come
+ * from the DGX Spark agent backend (`GET /gpu` → proxied by `/api/agent/gpu`); the
+ * output token rate is measured client-side from the SSE token stream. Every field is
+ * null until measured, so the panel degrades to an em-dash rather than a fabricated
+ * figure (matches the pipeline `CoverageTelemetry` convention).
+ */
+export interface NemotronTelemetry {
+  /** GPU device name reported by the Spark (e.g. "NVIDIA GB10"). */
+  device: string | null;
+  /** Served Nemotron model id. */
+  model: string | null;
+  /** GPU memory in use on the Spark, MiB. */
+  vramUsedMib: number | null;
+  /** Total GPU memory on the Spark, MiB — the "max VRAM". */
+  vramTotalMib: number | null;
+  /** GPU utilisation, %. */
+  gpuUtilPct: number | null;
+  /** Output tokens/sec of the most recent (or in-flight) generation. */
+  outputTokPerSec: number | null;
+  /** Peak output tokens/sec observed this session. */
+  peakTokPerSec: number | null;
+  /** Output tokens streamed in the most recent generation. */
+  lastOutputTokens: number | null;
+}

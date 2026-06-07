@@ -120,7 +120,7 @@ export function ScenarioTabs({ className }: { className?: string }) {
 
           <div className="flex items-center justify-between border-t border-hairline pt-3">
             <span className="nm-readout text-[10px] text-ink-faint">
-              {active.events.length} events · {deactivatedCount} sites offline
+              {deactivatedCount} sites offline
             </span>
             <Button variant="solid" size="sm" onClick={() => setExportOpen(false)}>
               <FileDown size={12} />

@@ -9,6 +9,7 @@ import {
   Network,
   Radar,
   Radio,
+  RadioTower,
   Satellite,
   SatelliteDish,
   ShieldCheck,
@@ -32,6 +33,7 @@ const ICON: Record<ToolName, LucideIcon> = {
   locate_place: Navigation,
   nearby_places: Radar,
   describe_network: Gauge,
+  find_masts: RadioTower,
 };
 
 const STATUS_TEXT: Record<ToolStatus, string> = {
@@ -48,76 +50,74 @@ const STATUS_COLOR: Record<ToolStatus, string> = {
   error: "text-critical",
 };
 
-/** One animated tool-pipeline cell. */
+/** One animated tool-pipeline row — icon · label · inline progress/result · status. */
 export function ToolCard({ call }: { call: ToolCall }) {
   const Icon = ICON[call.name] ?? Cpu;
   const { status, label, result, progress = 0 } = call;
   const active = status === "running" || status === "success";
+  const settled = status === "success" || status === "error";
 
   return (
     <div
       className={cn(
-        "relative flex min-w-0 flex-col gap-1.5 border bg-panel-2/70 px-2.5 py-2",
+        "relative flex min-w-0 items-center gap-2 border bg-panel-2/70 px-2.5 py-1.5",
         status === "error" ? "border-critical/40" : "border-hairline",
         active && "nm-glow",
         status === "running" && "border-info/40",
         status === "success" && "border-nv/40",
       )}
+      title={settled && result ? result : undefined}
     >
-      {/* header: icon + label + status word */}
-      <div className="flex items-center gap-1.5">
-        <Icon
-          size={13}
-          className={cn(
-            "shrink-0",
-            status === "queued" && "text-ink-faint",
-            status === "running" && "nm-pulse text-info",
-            status === "success" && "text-nv",
-            status === "error" && "text-critical",
-          )}
-        />
-        <span className="truncate font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-ink">
-          {label}
-        </span>
+      <Icon
+        size={13}
+        className={cn(
+          "shrink-0",
+          status === "queued" && "text-ink-faint",
+          status === "running" && "nm-pulse text-info",
+          status === "success" && "text-nv",
+          status === "error" && "text-critical",
+        )}
+      />
+      <span className="max-w-[45%] shrink-0 truncate font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-ink">
+        {label}
+      </span>
+
+      {/* middle: settled → one-line result; otherwise → inline progress sliver */}
+      {settled && result ? (
         <span
           className={cn(
-            "nm-readout ml-auto flex shrink-0 items-center gap-0.5 text-[9px] uppercase tracking-[0.12em]",
-            STATUS_COLOR[status],
-            status === "running" && "nm-pulse",
+            "min-w-0 flex-1 truncate font-mono text-[10.5px]",
+            status === "error" ? "text-critical/90" : "text-ink-dim",
           )}
         >
-          {status === "success" && <Check size={10} />}
-          {status === "error" && <X size={10} />}
-          {STATUS_TEXT[status]}
+          {result}
         </span>
-      </div>
-
-      {/* progress bar / result */}
-      {status === "queued" && (
-        <div className="h-[3px] w-full overflow-hidden bg-bg">
-          <div className="nm-shimmer h-full w-full" />
-        </div>
-      )}
-
-      {status === "running" && (
-        <div className="h-[3px] w-full overflow-hidden bg-bg">
+      ) : status === "running" ? (
+        <div className="h-[3px] min-w-0 flex-1 overflow-hidden bg-bg">
           <div
             className="h-full bg-info shadow-[0_0_8px_var(--color-info)] transition-[width] duration-300 ease-out"
             style={{ width: `${Math.round(Math.min(1, Math.max(0, progress)) * 100)}%` }}
           />
         </div>
+      ) : status === "queued" ? (
+        <div className="h-[3px] min-w-0 flex-1 overflow-hidden bg-bg">
+          <div className="nm-shimmer h-full w-full" />
+        </div>
+      ) : (
+        <span className="min-w-0 flex-1" />
       )}
 
-      {(status === "success" || status === "error") && result && (
-        <p
-          className={cn(
-            "whitespace-pre-wrap font-mono text-[10.5px] leading-snug",
-            status === "error" ? "text-critical/90" : "text-ink-dim",
-          )}
-        >
-          {result}
-        </p>
-      )}
+      <span
+        className={cn(
+          "nm-readout flex shrink-0 items-center gap-0.5 text-[9px] uppercase tracking-[0.12em]",
+          STATUS_COLOR[status],
+          status === "running" && "nm-pulse",
+        )}
+      >
+        {status === "success" && <Check size={10} />}
+        {status === "error" && <X size={10} />}
+        {STATUS_TEXT[status]}
+      </span>
     </div>
   );
 }
