@@ -32,9 +32,10 @@ LONDON_BBOX = {"lat_min": 51.28, "lat_max": 51.70, "lng_min": -0.52, "lng_max": 
 # COW range assumption: a Cell-on-Wheels garaged at a fire station can be towed this far.
 COW_MAX_KM = 3.0
 # Once parked, a COW redistributes signal to roughly this radius (its backhaul is Starlink,
-# but the ground cell it provides only reaches so far). Distinct from the tow limit above:
-# COW_MAX_KM constrains *where it can go*, COW_COVERAGE_KM constrains *what it then serves*.
-COW_COVERAGE_KM = 2.0
+# but the low-power ground cell it provides only reaches so far). Distinct from the tow limit
+# above: COW_MAX_KM constrains *where it can go*, COW_COVERAGE_KM constrains *what it then
+# serves*. A COW is a small low mast — its footprint is a few hundred metres, not km.
+COW_COVERAGE_KM = 0.8
 # A COW mast is short — used as the antenna height for its ray-tracing (todo: 20 m).
 COW_HEIGHT_M = 20.0
 

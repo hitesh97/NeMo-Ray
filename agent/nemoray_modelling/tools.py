@@ -1032,7 +1032,7 @@ class ToolRegistry:
         buildings = list(load_emergency_buildings())
 
         # Candidate COW positions are the dead-zone centroids. Cache each centroid so we can
-        # also count how many *other* holes fall inside a candidate's 2 km coverage disc.
+        # also count how many *other* holes fall inside a candidate's coverage disc.
         cells = [(i, f, feature_centroid(f)) for i, f in enumerate(feats)]
         candidates = []
         for i, f, c in cells:
@@ -1117,7 +1117,7 @@ class ToolRegistry:
         # the COW drop point + its coverage disc, and the tow line between them; fly there. ──
         cow_marker = {
             "id": "cow-1", "position": [cow["lng"], cow["lat"]], "kind": "cow",
-            "label": "Cell-on-Wheels", "detail": f"{radius_km:.0f} km coverage",
+            "label": "Cell-on-Wheels", "detail": f"{radius_km:.1f} km coverage",
             "radiusKm": radius_km,
         }
         station_marker = {
@@ -1139,7 +1139,7 @@ class ToolRegistry:
         })
         return ToolResult(
             result=f"Deploy COW from {depot['name']} ({best['tow_km']} km tow) to "
-            f"({best['lat']}, {best['lng']}) @ {height:.0f} m — covers a {radius_km:.0f} km "
+            f"({best['lat']}, {best['lng']}) @ {height:.0f} m — covers a {radius_km:.1f} km "
             f"radius, protecting {best['buildings_protected']} emergency building(s). "
             f"Coverage restored in ~{eta['total_min']:.0f} min "
             f"({eta['drive_min']:.0f} min tow at traffic ×{eta['traffic_factor']}, "

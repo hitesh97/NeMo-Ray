@@ -131,7 +131,7 @@ def _system_prompt(tools: list[ToolSpec]) -> str:
         "    policy above. If they answer (2)/'cow'/'cell-on-wheels' → deploy a CoW (next bullet).",
         "  • Deploy a Cell-on-Wheels / restore coverage: call deploy_cow DIRECTLY (no outage step",
         "    needed — it uses the current dead zones; one COW is garaged at every fire station,",
-        "    towable ≤3 km, ~2 km coverage). Then call check_starlink(lat,lng) with the COW's",
+        "    towable ≤3 km, ~0.8 km coverage). Then call check_starlink(lat,lng) with the COW's",
         "    coordinates from deploy_cow's result. Then reply `final` naming the fire station, tow",
         "    distance, buildings protected, and the Starlink satellite.",
         "  • Relocate a mast to operator coords: move_mast(site_id,new_lat,new_lng).",
