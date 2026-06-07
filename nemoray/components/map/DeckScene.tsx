@@ -4,7 +4,7 @@
  * DeckScene — the live 3D coverage twin, ported from the standalone deck.gl
  * viewer (`viewer/app.js`, "trips" theme by Mehul Chourasia) into the HUD.
  *
- * Animated ray traces (TripsLayer) coloured by antenna load share (green = light,
+ * Animated ray traces (TripsLayer) coloured by antenna load share (yellow = light,
  * red = stressed) over height-shaded extruded OSM buildings, EE masts + cuOpt-proposed
  * masts, coverage holes and London place labels, on a tokenless CARTO Dark Matter
  * basemap (MapLibre + MapboxOverlay).
@@ -86,9 +86,8 @@ const BUILDING_SHORT: RGB = [36, 42, 52];
 const BUILDING_TALL: RGB = [150, 166, 192];
 const BUILDING_HEIGHT_REF = 95; // metres at which the gradient saturates
 const GROUND_COLOR = "#0c1119"; // subtle dark blue-grey ground tint
-const LOAD_GREEN: RGB = [43, 214, 118]; // low load
-const LOAD_YELLOW: RGB = [255, 225, 107]; // mid load (lightest of the three)
-const LOAD_RED: RGB = [192, 57, 43]; // high load (dimmed brick red, was [255,78,68])
+const LOAD_YELLOW: RGB = [255, 225, 107]; // light coverage stress
+const LOAD_RED: RGB = [192, 57, 43]; // heavy coverage stress (dimmed brick red, was [255,78,68])
 const HOLE_COLOR: RGB = [255, 70, 70];
 const MATERIAL = {
   ambient: 0.1,
@@ -317,11 +316,8 @@ async function fetchJSON(url: string): Promise<unknown> {
 
 const coordKey = (coord: number[]) => `${coord[0].toFixed(6)},${coord[1].toFixed(6)}`;
 
-const loadHeatColor = (t: number): RGB => {
-  const clamped = clamp01(t);
-  if (clamped < 0.35) return mix(LOAD_GREEN, LOAD_YELLOW, clamped / 0.35);
-  return mix(LOAD_YELLOW, LOAD_RED, (clamped - 0.35) / 0.65);
-};
+// Yellow (light coverage stress) → red (heavy coverage stress).
+const loadHeatColor = (t: number): RGB => mix(LOAD_YELLOW, LOAD_RED, clamp01(t));
 
 // Each ray becomes a deck.gl "trip": a path, per-vertex timestamps (a pulse that
 // travels from the mast outward, staggered by a random phase), and a load-share colour.
@@ -337,7 +333,7 @@ function toTrips(fc: FC<RayFeature>): Trip[] {
   // Rank masts by their ray count and colour each by its *percentile position*, not its
   // raw share. The per-mast counts are heavily skewed (a handful of hubs carry far more
   // rays than the long tail, plus one big outlier), so a raw share or normalise-by-max
-  // ramp collapses almost every mast into the green band. Ranking spreads the green→red
+  // ramp collapses almost every mast into the yellow band. Ranking spreads the yellow→red
   // heat evenly across masts so relative stress (busiest = red) actually reads.
   const ranked = [...loadCounts.entries()].sort((a, b) => a[1] - b[1]);
   const denom = Math.max(1, ranked.length - 1);
