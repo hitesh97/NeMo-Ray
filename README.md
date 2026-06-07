@@ -2,11 +2,21 @@
 
 ![NeMo-Ray overview](media/overview.gif)
 
-GPU-accelerated **radio propagation digital twin** of the UK Emergency Services Network (ESN)
-4G/LTE coverage across Greater London. Physically-based ray tracing models real building
-geometry; an agentic optimise-and-resilience layer powered by Nemotron LLM reasons over outages,
-proposes new masts, and deploys Cell-on-Wheels with Starlink backhaul — all running locally on a
-DGX Spark GB10.
+When you call 999, your call rides a commercial mobile network — one never built to be
+failure-proof. A single downed mast can black out coverage exactly where it is needed most.
+Britain is replacing Airwave with the Emergency Services Network: 300,000 frontline responders,
+45,000 vehicles, and 200 control rooms, all running on EE's 4G. The UK Space Agency is already
+running a [funded procurement to 2030](https://www.find-tender.service.gov.uk/Notice/053022-2025)
+asking how satellite can plug the gaps — the problem is real, the money is there, and it is
+[not yet solved](https://publications.parliament.uk/pa/cm5803/cmselect/cmpubacc/1006/summary.html).
+
+We built a GPU-accelerated 3D digital twin of the EE network. Real EE cell-site locations are
+combined with UK building geometry to ray-trace physically accurate coverage maps — modelling how
+radio signals propagate through the built environment. A Nemotron-powered agent can then simulate
+failure events in real time: it identifies exactly which area has gone dark, calculates the
+optimal placement of satellite-equipped Cell-on-Wheels (COWs) fitted with Starlink terminals to
+cover the gap, and determines which Starlink satellites are overhead — failing coverage over to
+satellite and keeping emergency services connected when the ground network cannot.
 
 ---
 
@@ -106,7 +116,7 @@ DGX Spark GB10.
 
 ## Repository Layout
 
-```
+```text
 NeMo-Ray/
 ├── src/                        # Python pipeline (Sionna RT, cuOpt, verification)
 │   ├── pipeline.py             # Top-level orchestrator — tile, solve, mosaic, export
@@ -198,7 +208,7 @@ NeMo-Ray/
 
 ## Architecture Overview
 
-```
+```text
 SITEFINDER_MAY_2012.csv ─┐
 data/greater-london.osm.pbf ─┴──► src/ (Python pipeline, GPU)
                                    │  Sionna RT tiled coverage solve
@@ -315,7 +325,7 @@ The `StubPlanner` provides deterministic offline behaviour when no NIM is runnin
 A single solve over all of London would be billions of grid cells — intractable. Instead the
 area is tiled (NVIDIA's `sionna-large-radio-maps` pattern):
 
-```
+```text
 EE masts (Sitefinder CSV)   ─┐
                               ├─► per 2 km tile: OSM slice → Mitsuba scene → RadioMapSolver (GPU)
 OSM 3D buildings (Geofabrik) ─┘                                                    │
@@ -337,7 +347,7 @@ OSM 3D buildings (Geofabrik) ─┘                                             
 
 Frames hole-repair as a minimum set-cover MILP:
 
-```
+```text
 minimise   Σ y_j                              (y_j = build a new mast at candidate site j)
 s.t.       Σ_{j covers hole i} y_j ≥ 1   ∀ i  (every outdoor hole served by ≥1 new mast)
            y_j ∈ {0,1}
