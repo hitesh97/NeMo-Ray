@@ -87,3 +87,15 @@ class GpuMonitor:
             "peak_gpu_mem_mib": max(self.mem) if self.mem else None,
             "samples": len(self.util),
         }
+
+
+def perf_summary(monitor: "GpuMonitor", latencies_ms: list[float], wall_s: float) -> dict:
+    """Assemble the in-session GPU telemetry block the viewer's Compute panel shows."""
+    import mitsuba as mi
+    cov = {
+        "tiles_solved": len(latencies_ms),
+        "mean_ms": round(sum(latencies_ms) / len(latencies_ms), 1) if latencies_ms else None,
+        "max_ms": round(max(latencies_ms), 1) if latencies_ms else None,
+    }
+    return {"device": device_name(), "backend": mi.variant(), **monitor.summary(),
+            "coverage_solve": cov, "wall_time_s": round(wall_s, 1)}

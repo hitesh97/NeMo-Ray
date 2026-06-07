@@ -107,19 +107,28 @@ def verify(cfg) -> dict:
           + (f" (capped from {len(affected_keys)})" if capped else ""))
 
     # Re-solve the affected tiles; keep cached results for the rest.
-    results, affected, new_ray_dicts = [], [], []
+    import time
+    from .gpu import GpuMonitor, perf_summary
+    monitor = GpuMonitor().start()
+    t0 = time.time()
+    latencies, results, affected, new_ray_dicts = [], [], [], []
     for tile, cache in tiles:
         if tile.key not in affected_set:
             results.append(_load_cached(cache, tile.key))
             continue
         affected.append(tile.key)
         xml, _ = build_tile_scene(cfg, tile, buildings)
+        ts = time.time()
         res = RT.solve_tile(cfg, tile, xml, all_sites)        # existing + new transmitters
+        latencies.append((time.time() - ts) * 1000.0)
         results.append(res)
         core_new = [s for s in new_masts
                     if abs(s.e - tile.e0) <= half and abs(s.n - tile.n0) <= half]
         if core_new:
             new_ray_dicts.extend(RT.trace_mast_rays(cfg, tile, xml, core_new))
+    monitor.stop()
+    with open(os.path.join(cfg["paths"]["out_dir"], "perf.json"), "w") as f:
+        json.dump(perf_summary(monitor, latencies, time.time() - t0), f)
     print(f"  re-solved {len(affected)} affected tiles on Sionna RT")
 
     # Re-mosaic with the updated tiles and re-export coverage + hotspots.

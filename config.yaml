@@ -48,10 +48,11 @@ cuopt:
   # optimize.py reads CUOPT_API_KEY first and only falls back to this value.
   api_key: ""
   url: "https://optimize.api.nvidia.com/v1/nvidia/cuopt"
-  near_radius_m: 50.0            # a mast this close serves a weak point even without LOS
-                                 # (kept tight so shared masts are line-of-sight-safe,
-                                 #  pushing RT-verified coverage toward 100%)
-  coverage_radius_m: 280.0       # at medium range a new mast needs clear line-of-sight
+  near_radius_m: 250.0           # a 25 m / 58 dBm macro mast serves weak points within this
+                                 # radius — set to a realistic small-cell reach so ONE mast
+                                 # covers a whole cluster of holes (few, well-spread masts)
+                                 # instead of ~one mast per hole sitting on top of each other.
+  coverage_radius_m: 400.0       # at longer range a new mast needs clear line-of-sight
   candidate_spacing_m: 90.0      # grid spacing of candidate new-mast sites
   new_mast_height_m: 25.0        # assumed antenna height of a proposed mast
   new_mast_power_dbm: 58.0       # assumed EIRP of a proposed macro mast
