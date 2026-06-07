@@ -858,11 +858,31 @@ interface Box {
   maxX: number;
   maxY: number;
 }
-function declutterLabels(map: maplibregl.Map): Landmark[] {
+// Map the canonical gazetteer (/geo/landmarks.json — the single source of truth the Nemotron
+// agent's knowledge graph also reads) down to the map's label set: only entries flagged
+// `label: true` are drawn, carrying their `tier`. Falls back to the hardcoded LANDMARKS if the
+// fetch fails or yields nothing, so the labels never disappear.
+interface GazetteerEntry {
+  name: string;
+  lng: number;
+  lat: number;
+  tier?: LandmarkTier;
+  label?: boolean;
+}
+function toLabelLandmarks(raw: unknown): Landmark[] {
+  const places = (raw as { places?: GazetteerEntry[] } | null)?.places;
+  if (!Array.isArray(places)) return LANDMARKS;
+  const out: Landmark[] = places
+    .filter((p) => p?.label && typeof p.lng === "number" && typeof p.lat === "number")
+    .map((p) => ({ name: p.name, lng: p.lng, lat: p.lat, tier: (p.tier ?? 2) as LandmarkTier }));
+  return out.length ? out : LANDMARKS;
+}
+
+function declutterLabels(map: maplibregl.Map, landmarks: Landmark[]): Landmark[] {
   const canvas = map.getCanvas();
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
-  const ordered = [...LANDMARKS].sort((a, b) => labelPriority(b) - labelPriority(a));
+  const ordered = [...landmarks].sort((a, b) => labelPriority(b) - labelPriority(a));
   const kept: Landmark[] = [];
   const boxes: Box[] = [];
   for (const d of ordered) {
@@ -1223,6 +1243,10 @@ export function DeckScene({
   // effect below is the only writer).
   const mapRef = useRef<maplibregl.Map | null>(null);
 
+  // Place labels, sourced from the canonical gazetteer on mount (see toLabelLandmarks); the
+  // hardcoded LANDMARKS array is the fallback. declutterLabels reads this ref.
+  const landmarksRef = useRef<Landmark[]>(LANDMARKS);
+
   // Agent fly-to: when a directive carries a `focus` (bumped nonce), fit its bbox or fly to
   // its centre. Keyed on the nonce so the same target re-fires; guarded until the map exists.
   useEffect(() => {
@@ -1331,15 +1355,19 @@ export function DeckScene({
       map.addControl(overlay);
 
       // Load everything in parallel.
-      const [buildings, raysFC, mastsFC, newFC, holesFC, emergency] = await Promise.all([
-        fetchJSON(`${DATA}/buildings.geojson`) as Promise<GeoJSON>,
-        fetchJSON(`${DATA}/paths.geojson`) as Promise<FC<RayFeature>>,
-        fetchJSON(`${DATA}/masts.geojson`).catch(() => null) as Promise<FC<MastFeature> | null>,
-        fetchJSON(`${DATA}/new_masts.geojson`).catch(() => null) as Promise<FC<MastFeature> | null>,
-        fetchJSON(`${DATA}/hotspots.geojson`).catch(() => null) as Promise<HoleFC | null>,
-        fetchJSON(`/api/emergency-services`).catch(() => null) as Promise<EmergencyPayload | null>,
-      ]);
+      const [buildings, raysFC, mastsFC, newFC, holesFC, emergency, gazetteer] =
+        await Promise.all([
+          fetchJSON(`${DATA}/buildings.geojson`) as Promise<GeoJSON>,
+          fetchJSON(`${DATA}/paths.geojson`) as Promise<FC<RayFeature>>,
+          fetchJSON(`${DATA}/masts.geojson`).catch(() => null) as Promise<FC<MastFeature> | null>,
+          fetchJSON(`${DATA}/new_masts.geojson`).catch(() => null) as Promise<FC<MastFeature> | null>,
+          fetchJSON(`${DATA}/hotspots.geojson`).catch(() => null) as Promise<HoleFC | null>,
+          fetchJSON(`/api/emergency-services`).catch(() => null) as Promise<EmergencyPayload | null>,
+          // Canonical place gazetteer — the same file the agent's knowledge graph reads.
+          fetchJSON(`/geo/landmarks.json`).catch(() => null),
+        ]);
       if (cancelled) return;
+      landmarksRef.current = toLabelLandmarks(gazetteer);
 
       const data: SceneData = {
         buildings,
@@ -1361,7 +1389,7 @@ export function DeckScene({
       // The decluttered place-label set is recomputed only when the viewport actually moves
       // (zoom/pan/rotate), then reused across frames so the per-frame rebuild hands deck.gl a
       // stable `data` array and it skips re-tessellating the text.
-      let shownLabels: Landmark[] = declutterLabels(map!);
+      let shownLabels: Landmark[] = declutterLabels(map!, landmarksRef.current);
       let lastLabelView = "";
       const labelViewKey = () => {
         const c = map!.getCenter();
@@ -1383,7 +1411,7 @@ export function DeckScene({
         const scale = markerScale(zoom);
         const vk = labelViewKey();
         if (vk !== lastLabelView) {
-          shownLabels = declutterLabels(map!);
+          shownLabels = declutterLabels(map!, landmarksRef.current);
           lastLabelView = vk;
         }
         overlay.setProps({

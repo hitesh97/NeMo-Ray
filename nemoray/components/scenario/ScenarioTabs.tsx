@@ -4,10 +4,8 @@ import {
   Activity,
   AlertTriangle,
   FileDown,
-  Plus,
   PlugZap,
   Radio,
-  ShieldAlert,
   Users,
 } from "lucide-react";
 import type { ComponentType } from "react";
@@ -26,7 +24,6 @@ const SCENARIO_ICON: Record<ScenarioId, IconType> = {
   "high-demand": Users,
   "major-event": Activity,
   "infrastructure-loss": AlertTriangle,
-  "cyber-attack": ShieldAlert,
   "power-outage": PlugZap,
 };
 
@@ -60,9 +57,8 @@ function ScenarioSegment({ id }: { id: ScenarioId }) {
   );
 }
 
-/** The scenario selector row: segments + New Scenario + Export Report. */
+/** The scenario selector row: segments + Export Report. */
 export function ScenarioTabs({ className }: { className?: string }) {
-  const [newOpen, setNewOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
 
   const activeScenarioId = useNemoStore((s) => s.activeScenarioId);
@@ -89,54 +85,6 @@ export function ScenarioTabs({ className }: { className?: string }) {
       {SCENARIO_ORDER.map((id) => (
         <ScenarioSegment key={id} id={id} />
       ))}
-
-      {/* + New Scenario (ghost) */}
-      <Dialog
-        open={newOpen}
-        onOpenChange={setNewOpen}
-        title="New Scenario"
-        trigger={
-          <button
-            type="button"
-            className="flex h-7 shrink-0 items-center gap-1 border border-dashed border-hairline px-2.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-faint transition-colors hover:border-hairline-strong hover:text-ink-dim"
-          >
-            <Plus size={11} />
-            New Scenario
-          </button>
-        }
-      >
-        <div className="flex flex-col gap-3">
-          <p className="text-xs leading-relaxed text-ink-dim">
-            Compose a synthetic incident — seed deactivated sites, scripted event
-            markers, and a timeline span — to stress-test the network and the
-            agent&apos;s response.
-          </p>
-          <label className="flex flex-col gap-1">
-            <span className="nm-eyebrow">Scenario name</span>
-            <input
-              type="text"
-              placeholder="e.g. Flash Flood — Thames Barrier"
-              className="nm-readout h-8 border border-hairline-strong bg-bg px-2 text-xs text-ink outline-none placeholder:text-ink-faint focus:border-nv"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="nm-eyebrow">Timeline span (hours)</span>
-            <input
-              type="number"
-              defaultValue={4}
-              min={1}
-              max={24}
-              className="nm-readout h-8 w-24 border border-hairline-strong bg-bg px-2 text-xs text-ink outline-none focus:border-nv"
-            />
-          </label>
-          <div className="mt-1 flex items-center justify-between border-t border-hairline pt-3">
-            <span className="nm-eyebrow text-ink-faint">Scenario authoring · coming soon</span>
-            <Button variant="ghost" size="sm" onClick={() => setNewOpen(false)}>
-              Close
-            </Button>
-          </div>
-        </div>
-      </Dialog>
 
       <div className="ml-auto" />
 

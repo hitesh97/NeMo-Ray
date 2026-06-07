@@ -1,4 +1,4 @@
-import type { AgentRole, AgentStreamEvent } from "@/lib/types";
+import type { AgentRole, AgentStreamEvent, ScenarioId } from "@/lib/types";
 
 export interface AgentRequest {
   /** Either a free-text operator prompt… */
@@ -13,6 +13,8 @@ export interface AgentRequest {
   history?: { role: AgentRole; content: string }[];
   /** Mast ids the operator has selected on the map (outage / move targets). */
   selectedSiteIds?: string[];
+  /** Active HUD scenario — selects the pre-rendered outage when no masts are selected. */
+  scenario?: ScenarioId;
 }
 
 /**

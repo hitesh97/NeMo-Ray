@@ -9,7 +9,15 @@ import { useNemoStore } from "@/store";
 import { AgentMessage } from "./AgentMessage";
 import { AgentComposer } from "./AgentComposer";
 
-const EXAMPLES = [
+// Quick-action chips for the empty console. The incident scenarios surface the outage→restore
+// flow (the exact phrasings the agent routes on); the nominal "live" feed shows general probes.
+const OUTAGE_EXAMPLES = [
+  "Run this scenario end-to-end",
+  "Simulate this scenario's outage",
+  "Deploy a Cell-on-Wheels & check Starlink",
+  "Propose new cuOpt masts",
+] as const;
+const LIVE_EXAMPLES = [
   "Assess coverage gaps",
   "Run cuOpt for infill masts",
   "Network status",
@@ -22,6 +30,7 @@ const EXAMPLES = [
 export function AgentConsole({ className }: { className?: string }) {
   const messages = useNemoStore((s) => s.messages);
   const streaming = useNemoStore((s) => s.streaming);
+  const hasOutage = useNemoStore((s) => Boolean(s.scenarios[s.activeScenarioId].outage));
   const resetConversation = useNemoStore((s) => s.resetConversation);
   const addOperatorMessage = useNemoStore((s) => s.addOperatorMessage);
   const requestAgentRun = useNemoStore((s) => s.requestAgentRun);
@@ -79,7 +88,7 @@ export function AgentConsole({ className }: { className?: string }) {
               the cuOpt optimiser.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-1.5">
-              {EXAMPLES.map((ex) => (
+              {(hasOutage ? OUTAGE_EXAMPLES : LIVE_EXAMPLES).map((ex) => (
                 <button
                   key={ex}
                   type="button"

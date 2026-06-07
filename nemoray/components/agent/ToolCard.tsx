@@ -3,8 +3,11 @@
 import {
   Check,
   Cpu,
+  Gauge,
   MapPin,
+  Navigation,
   Network,
+  Radar,
   Radio,
   Satellite,
   SatelliteDish,
@@ -26,6 +29,9 @@ const ICON: Record<ToolName, LucideIcon> = {
   deploy_cow: Truck,
   check_starlink: SatelliteDish,
   find_nearest: MapPin,
+  locate_place: Navigation,
+  nearby_places: Radar,
+  describe_network: Gauge,
 };
 
 const STATUS_TEXT: Record<ToolStatus, string> = {

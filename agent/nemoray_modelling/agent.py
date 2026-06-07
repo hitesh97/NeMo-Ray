@@ -105,17 +105,28 @@ def _system_prompt(tools: list[ToolSpec]) -> str:
         "  3. validate_site on that candidate.",
         "  4. If validation FAILS, call run_cuopt again with the failed candidate_id",
         "     in `exclude`, then validate the new candidate.",
-        "  5. Only once a site PASSES, reply with `final` recommending it and citing",
-        "     the validation reason. Never call a tool twice with identical args.",
+        "  5. Only once a site PASSES, reply with `final` recommending it THOROUGHLY — name the",
+        "     candidate, its coverage gain % and estimated cost, and the validation reason.",
+        "     Never call a tool twice with identical args.",
         "",
         "OTHER SCENARIOS — do the FEWEST steps, one tool per turn:",
-        "  • Simulate an outage ('mast X down', 'what if X fails', 'simulate the selected masts'):",
-        "    call simulate_outage(site_ids) with the named/selected ids, then STOP and reply `final`:",
-        "    lead with which police/fire/hospital buildings lose coverage, then ASK the operator how",
-        "    to restore it — exactly: 'How would you like to restore coverage — (1) optimise new",
-        "    permanent masts with cuOpt, or (2) deploy a Cell-on-Wheels with Starlink backhaul?'.",
-        "    Do NOT choose for them and do NOT call another tool this turn. Never call",
-        "    simulate_outage with an empty site_ids list.",
+        "  • Simulate an outage ('mast X down', 'what if X fails', 'simulate the selected masts',",
+        "    'simulate this scenario's outage'): call simulate_outage — pass the named/selected ids",
+        "    if the operator gave any, otherwise call it with NO site_ids and it simulates the",
+        "    active scenario's pre-rendered outage (you do NOT need the operator to pick masts",
+        "    first). Then STOP and reply `final`: lead with which police/fire/hospital buildings",
+        "    lose coverage, then ASK the operator how to restore it — exactly: 'How would you like",
+        "    to restore coverage — (1) optimise new permanent masts with cuOpt, or (2) deploy a",
+        "    Cell-on-Wheels with Starlink backhaul?'. Do NOT choose for them and do NOT call",
+        "    another tool this turn.",
+        "  • RUN / PLAY a scenario end-to-end ('run this scenario', 'play the outage', 'respond to",
+        "    the outage', 'full incident response'): do the WHOLE resilience flow without asking —",
+        "    simulate_outage, then deploy_cow with keep_overlay=true (so the dead zone + affected",
+        "    buildings stay painted under the COW), then check_starlink(lat,lng) with the COW's",
+        "    coordinates from deploy_cow. THEN reply `final` with a THOROUGH operator summary:",
+        "    which police/fire/hospital buildings lost coverage, the COW's source fire station +",
+        "    tow distance + restoration ETA (minutes, incl. the traffic factor), and the Starlink",
+        "    satellite — then offer a permanent cuOpt fix.",
         "  • If the operator then answers (1)/'optimise'/'new masts' → run the new-mast infill",
         "    policy above. If they answer (2)/'cow'/'cell-on-wheels' → deploy a CoW (next bullet).",
         "  • Deploy a Cell-on-Wheels / restore coverage: call deploy_cow DIRECTLY (no outage step",
@@ -127,8 +138,23 @@ def _system_prompt(tools: list[ToolSpec]) -> str:
         "  • 'Where is the nearest hospital / police station / fire station?' (or 'show me the",
         "    closest X'): call find_nearest(kind) — kind ∈ hospital|police|fire. It highlights",
         "    the building on the map and flies to it; then reply `final` naming it and the distance.",
+        "  • 'Show me / fly to / where is <a NAMED place>' — a landmark, area, transport hub,",
+        "    stadium, park, or a named station/hospital (e.g. 'Tower Bridge', \"Guy's Hospital\"):",
+        "    call locate_place(query=<the name>); it flies the camera there. Then reply `final`.",
+        "  • 'What's near / around <place>' (or 'what hospitals/fire stations are around X'):",
+        "    call nearby_places(query=<place>[, categories]) — it lists nearby landmarks and",
+        "    emergency services and frames the camera on them. Then reply `final`.",
+        "  • 'How big is the network / what's the coverage / give me a network overview':",
+        "    call describe_network() — masts, buildings, % served, dead zones — then `final`.",
         "  • After a tool returns, either call the next required tool or reply `final` — never",
         "    repeat a tool with identical args, and never reply with prose outside `final`.",
+        "",
+        "ANSWERS: your `final` is the operator's briefing — WRITE IT YOURSELF from the tool",
+        "  OBSERVATIONs, never from memory and never invent numbers. Quote the real figures the",
+        "  tools returned: the affected police/fire/hospital counts, the COW's source fire station",
+        "  + tow distance + restoration ETA in minutes (and the traffic factor), the Starlink",
+        "  satellite (name, elevation), and cuOpt's coverage-gain % + estimated cost. Be specific,",
+        "  thorough and plain-spoken (2–4 sentences) — not a template; describe THIS incident.",
         "",
         "MAP: every tool automatically highlights its result on the operator's map (dead-zone",
         "  ground, the COW + the fire station to retrieve it from, the proposed mast site, or a",
@@ -368,11 +394,29 @@ class StubPlanner:
     `selected_site_ids` are the masts the operator clicked on the map; the stub uses
     them as the outage targets (the real model reads them from the event text)."""
 
-    def __init__(self, selected_site_ids: list[str] | None = None) -> None:
+    def __init__(self, selected_site_ids: list[str] | None = None,
+                 scenario: str | None = None) -> None:
         self.selected = list(selected_site_ids or [])
+        self.scenario = scenario
+        # Salient observations carried across decide() calls within a run so a thorough final
+        # can cite them (each lands several steps before the summary): the outage impact, the
+        # COW deployment + its restoration ETA, and the cuOpt candidate.
+        self._restoration: dict[str, Any] | None = None
+        self._outage: dict[str, Any] | None = None
+        self._cow: dict[str, Any] | None = None
+        self._candidate: dict[str, Any] | None = None
 
     def decide(self, messages: list[dict[str, str]]) -> dict[str, Any]:
         event, step, last_obs = self._inspect(messages)
+        if isinstance(last_obs, dict):
+            if last_obs.get("restoration"):
+                self._restoration = last_obs["restoration"]
+            if "affected_counts" in last_obs:
+                self._outage = last_obs
+            if last_obs.get("source_station"):
+                self._cow = last_obs
+            if last_obs.get("candidate"):
+                self._candidate = last_obs["candidate"]
         low = event.lower()
 
         if any(k in low for k in ("what can you", "what is this", "what does", "help", "capabilit",
@@ -384,6 +428,11 @@ class StubPlanner:
             return self._optimise_script(step, last_obs)
         if ev in ("2", "two", "option 2"):
             return self._deploy_script(step, last_obs)
+        # End-to-end resilience run ('run/play this scenario', 'respond to the outage', 'full
+        # incident response'): outage → COW → Starlink in one go, with a thorough summary. This
+        # is checked BEFORE the bare-outage bucket so "simulate the outage" still stops to ask.
+        if self._is_scenario_run(low):
+            return self._scenario_script(step, last_obs)
         if any(k in low for k in ("nearest", "closest", "where is", "where's", "locate")):
             kind = ("hospital" if "hospital" in low else
                     "fire" if "fire" in low else
@@ -398,12 +447,14 @@ class StubPlanner:
                                  f"({last_obs.get('distance_km', '?')} km) — highlighted on the map."}
             return {"thought": "Reporting the nearest service.",
                     "final": f"Highlighted the nearest {kind} on the map."}
-        if any(k in low for k in ("down", "offline", "outage", "fail", "break", "lost")):
+        if any(k in low for k in ("down", "offline", "outage", "fail", "break", "lost",
+                                  "simulate", "knock out", "take offline")):
             return self._outage_script(step, last_obs)
         if any(k in low for k in ("cell-on-wheels", "cell on wheels", "cow", "deploy")):
             return self._deploy_script(step, last_obs)
-        if any(k in low for k in ("optimi", "add mast", "new mast", "fill", "coverage hole",
-                                  "fix coverage", "infill")):
+        if any(k in low for k in ("optimi", "add mast", "new mast", "propose", "proposed",
+                                  "fill", "coverage hole", "fix coverage", "infill", "cuopt",
+                                  "permanent")):
             return self._optimise_script(step, last_obs)
         if any(k in low for k in ("starlink", "satellite", "backhaul")):
             if step == 0:
@@ -420,7 +471,8 @@ class StubPlanner:
     def _outage_script(self, step: int, last_obs: dict[str, Any]) -> dict[str, Any]:
         if step == 0:
             return {"thought": "Simulating the outage to find the dead zones and who they hit.",
-                    "action": "simulate_outage", "args": {"site_ids": self.selected}}
+                    "action": "simulate_outage",
+                    "args": {"site_ids": self.selected, "scenario": self.scenario}}
         # After the outage, report the impact and ASK how to restore — don't pick for them.
         counts = last_obs.get("affected_counts") or {}
         hit = ", ".join(f"{v} {k}" for k, v in counts.items() if v) or "no emergency-service buildings"
@@ -429,6 +481,27 @@ class StubPlanner:
                 "final": f"The outage opens {dz} dead zone(s), knocking out coverage for {hit}. "
                          "How would you like to restore coverage — (1) optimise new permanent masts "
                          "with cuOpt, or (2) deploy a Cell-on-Wheels with Starlink backhaul?"}
+
+    def _scenario_script(self, step: int, last_obs: dict[str, Any]) -> dict[str, Any]:
+        """One-shot incident response: simulate the outage, deploy the COW from the nearest fire
+        station (keeping the dead zone + affected buildings painted), find its Starlink backhaul,
+        then give a thorough summary. The 'run/play this scenario' path."""
+        if step == 0:
+            return {"thought": "Simulating the scenario outage to map the dead zones and who they hit.",
+                    "action": "simulate_outage",
+                    "args": {"site_ids": self.selected, "scenario": self.scenario}}
+        if step == 1:
+            return {"thought": "Deploying a Cell-on-Wheels from the nearest fire station.",
+                    "action": "deploy_cow",
+                    "args": {"disabled_site_ids": self.selected, "scenario": self.scenario,
+                             "keep_overlay": True}}
+        if step == 2:
+            cow = last_obs.get("cow") or {}
+            return {"thought": "Finding the Starlink satellite the COW backhauls through.",
+                    "action": "check_starlink",
+                    "args": {"lat": cow.get("lat"), "lng": cow.get("lng")}}
+        return {"thought": "Summarising the full incident response.",
+                "final": self._scenario_final(last_obs)}
 
     def _deploy_script(self, step: int, last_obs: dict[str, Any]) -> dict[str, Any]:
         if step == 0:
@@ -462,18 +535,81 @@ class StubPlanner:
                     "action": "validate_site",
                     "args": {"candidate_id": cid, "lat": cand.get("lat"),
                              "lng": cand.get("lng")}}
-        return {"thought": "Recommending the validated site.",
-                "final": f"Recommend new mast at the validated candidate "
-                         f"({last_obs.get('reason', 'clear line-of-sight')})."}
+        c = self._candidate or {}
+        gain = c.get("coverage_gain_pct")
+        gain_txt = f"+{round(gain * 100)}% coverage" if isinstance(gain, (int, float)) else ""
+        cost = c.get("est_cost_gbp")
+        cost_txt = f"£{cost:,}" if isinstance(cost, (int, float)) else ""
+        bits = ", ".join(b for b in (gain_txt, cost_txt) if b)
+        label = c.get("label", "the validated candidate")
+        return {"thought": "Recommending the validated cuOpt site.",
+                "final": f"cuOpt recommends a new mast at {label}"
+                         + (f" ({bits})" if bits else "")
+                         + f". Validation PASSED — {last_obs.get('reason', 'clear line-of-sight')}. "
+                         "The proposed site is highlighted in gold on the map."}
 
     # ── helpers ──────────────────────────────────────────────────────────────────
     @staticmethod
-    def _starlink_final(last_obs: dict[str, Any]) -> str:
+    def _is_scenario_run(low: str) -> bool:
+        """True for 'run/play this scenario', 'respond to the outage', 'full incident response' —
+        the one-shot end-to-end resilience flow (vs 'simulate the outage', which stops to ask)."""
+        run_verbs = ("run ", "play ", "start ", "activate ", "walk me through", "respond to",
+                     "handle ", "deal with", "work through", "execute")
+        if "scenario" in low and any(v in low for v in run_verbs):
+            return True
+        return any(p in low for p in ("full response", "full incident", "incident response",
+                                      "respond to the outage", "run the response",
+                                      "end-to-end", "end to end"))
+
+    def _scenario_final(self, last_obs: dict[str, Any]) -> str:
+        """Thorough operator summary for a one-shot scenario run: outage impact + the COW
+        restoration (station, tow, traffic-aware ETA, buildings re-covered) + the Starlink
+        backhaul, then the permanent-fix offer."""
+        o = self._outage or {}
+        c = self._cow or {}
+        r = self._restoration or {}
+        counts = o.get("affected_counts") or {}
+        hit = ", ".join(f"{v} {k}" for k, v in counts.items() if v)
+        dz = o.get("dead_zone_count", "several")
+        station = (c.get("source_station") or {}).get("name", "the nearest fire station")
+        tow = c.get("tow_km", "?")
+        protected = c.get("buildings_protected", "?")
         sat = last_obs.get("satellite")
+        lead = (
+            f"The outage opened {dz} dead zone(s), cutting coverage to {hit} (highlighted on the map)."
+            if hit else
+            f"The outage opened {dz} dead zone(s) across the area (highlighted on the map; no "
+            "emergency-service building sits directly in the hole)."
+        )
+        parts = [f"Incident response complete. {lead}"]
+        if r:
+            parts.append(
+                f"Immediate fix: tow the Cell-on-Wheels from {station} ({tow} km) — on air in "
+                f"~{r.get('total_min', '?')} min ({r.get('drive_min', '?')} min drive at traffic "
+                f"×{r.get('traffic_factor', '?')}, {r.get('setup_min', '?')} min setup), "
+                f"re-covering {protected} emergency building(s).")
+        else:
+            parts.append(f"Immediate fix: Cell-on-Wheels from {station} ({tow} km), protecting "
+                         f"{protected} emergency building(s).")
+        if sat:
+            parts.append(f"It backhauls via {sat} ({last_obs.get('elevation_deg', '?')}° "
+                         f"elevation, {last_obs.get('slant_range_km', '?')} km).")
+        parts.append("For a permanent fix, ask me to propose new cuOpt masts.")
+        return " ".join(parts)
+
+    def _starlink_final(self, last_obs: dict[str, Any]) -> str:
+        sat = last_obs.get("satellite")
+        eta = self._restoration
+        eta_txt = (
+            f" Coverage restored in ~{eta['total_min']:.0f} min "
+            f"(tow at traffic ×{eta['traffic_factor']}, {eta['setup_min']:.0f} min setup)."
+            if eta else ""
+        )
         if sat:
             return (f"Restoration plan ready: deploy a Cell-on-Wheels and backhaul via "
                     f"{sat} ({last_obs.get('elevation_deg', '?')}° elevation, "
-                    f"{last_obs.get('slant_range_km', '?')} km). Emergency buildings re-covered.")
+                    f"{last_obs.get('slant_range_km', '?')} km).{eta_txt} "
+                    "Emergency buildings re-covered.")
         return "Restoration assessed. See the tool results for the deployment details."
 
     @staticmethod

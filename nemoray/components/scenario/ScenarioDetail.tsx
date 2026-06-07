@@ -6,6 +6,7 @@ import {
   GitBranch,
   Radio,
   ShieldAlert,
+  Timer,
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -44,6 +45,10 @@ export function ScenarioDetail({ className }: { className?: string }) {
   const scenarioId = useNemoStore((s) => s.activeScenarioId);
   const scenario = useNemoStore((s) => s.scenarios[scenarioId]);
   const deactivated = useNemoStore((s) => s.deactivatedSiteIds);
+  // Computed timeline + traffic-aware restoration plan (useScenarioTimeline), not the static
+  // shell's empty events.
+  const events = useNemoStore((s) => s.events);
+  const restoration = useNemoStore((s) => s.restoration);
 
   return (
     <Panel frame className={cn("bg-panel/90", className)}>
@@ -69,18 +74,45 @@ export function ScenarioDetail({ className }: { className?: string }) {
           </div>
           <div className="border border-hairline bg-bg/50 p-2">
             <div className="nm-eyebrow">Logged Events</div>
-            <div className="nm-readout mt-0.5 text-xl text-ink">{scenario.events.length}</div>
+            <div className="nm-readout mt-0.5 text-xl text-ink">{events.length}</div>
           </div>
         </div>
 
+        {restoration && (
+          <div className="border border-hairline bg-bg/50 p-2.5">
+            <div className="nm-eyebrow mb-1.5 flex items-center gap-1.5">
+              <Timer size={11} className="text-nv" />
+              Restoration ETA
+            </div>
+            <div className="flex items-baseline justify-between">
+              <span className="truncate text-xs text-ink-dim">{restoration.stationName}</span>
+              <span className="nm-readout shrink-0 text-lg text-nv">
+                {restoration.totalMin} min
+              </span>
+            </div>
+            <div className="mt-2 grid grid-cols-3 gap-px border border-hairline bg-hairline">
+              {[
+                { label: "Dispatch", value: `${restoration.dispatchMin}m` },
+                { label: `Tow ×${restoration.trafficFactor}`, value: `${restoration.driveMin}m` },
+                { label: "Setup", value: `${restoration.setupMin}m` },
+              ].map((c) => (
+                <div key={c.label} className="bg-panel-2 px-1.5 py-1">
+                  <div className="nm-eyebrow text-[8.5px] text-ink-faint">{c.label}</div>
+                  <div className="nm-readout text-sm text-ink">{c.value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-col gap-1">
           <div className="nm-eyebrow mb-1">Event Track</div>
-          {scenario.events.length === 0 && (
+          {events.length === 0 && (
             <div className="border border-hairline bg-bg/40 px-2 py-3 text-center text-xs text-ink-faint">
               No events — nominal operations.
             </div>
           )}
-          {scenario.events.map((ev) => {
+          {events.map((ev) => {
             const Icon = KIND_ICON[ev.kind];
             return (
               <div
@@ -89,7 +121,14 @@ export function ScenarioDetail({ className }: { className?: string }) {
               >
                 <span className="nm-readout text-[11px] text-ink-faint">{fmtTime(ev.tMs)}</span>
                 <Icon size={13} className="shrink-0 text-ink-dim" />
-                <span className="flex-1 truncate text-xs text-ink">{ev.label}</span>
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-xs text-ink">{ev.label}</span>
+                  {ev.detail && (
+                    <span className="nm-readout truncate text-[10px] text-ink-faint">
+                      {ev.detail}
+                    </span>
+                  )}
+                </span>
                 <StatusDot status={KIND_STATUS[ev.kind]} />
               </div>
             );

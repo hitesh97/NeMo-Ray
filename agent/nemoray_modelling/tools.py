@@ -37,10 +37,13 @@ measured — numbers. Two signals tell you a fallback fired:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 
@@ -89,6 +92,97 @@ def _warn_fallback(tool: str, reason: str) -> None:
         flush=True,
     )
 
+
+# ── pre-rendered outages (mast positions + per-scenario id sets) ──────────────────
+def _box_polygon(lng: float, lat: float, h: float = 0.0035) -> dict[str, Any]:
+    """A small square GeoJSON Polygon (~h° half-width, ≈500–700 m) centred on (lng, lat)."""
+    ring = [[lng - h, lat - h], [lng + h, lat - h],
+            [lng + h, lat + h], [lng - h, lat + h], [lng - h, lat - h]]
+    return {"type": "Polygon", "coordinates": [ring]}
+
+
+def _repo_root() -> Path:
+    """Repo root (holds the nemoray app + data/). Overridable with NEMORAY_ROOT."""
+    env = os.environ.get("NEMORAY_ROOT")
+    if env:
+        return Path(env)
+    here = Path(__file__).resolve()
+    for p in here.parents:
+        if (p / "nemoray" / "public" / "raytracing").is_dir() or (
+            p / "data" / "emergency"
+        ).is_dir():
+            return p
+    return here.parents[2]
+
+
+@lru_cache(maxsize=1)
+def _mast_positions() -> dict[str, list[float]]:
+    """Map mast id → [lng, lat] from the pipeline's masts.geojson, so an outage can draw its
+    dead zones where the downed masts actually stood. Best-effort: that artifact is gitignored
+    (the pipeline regenerates it), so this returns {} when absent and callers fall back."""
+    path = _repo_root() / "nemoray" / "public" / "raytracing" / "masts.geojson"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return {}
+    out: dict[str, list[float]] = {}
+    for f in data.get("features", []):
+        try:
+            mid = f["properties"]["id"]
+            lng, lat = f["geometry"]["coordinates"][:2]
+        except (KeyError, ValueError, TypeError):
+            continue
+        out[str(mid)] = [float(lng), float(lat)]
+    return out
+
+
+def _zones_for_sites(site_ids: list[str]) -> list[dict[str, Any]]:
+    """Dead-zone features centred on each downed mast's real position (a coverage hole opens
+    where the mast was). Empty when no position resolves (artifact missing) → caller falls back
+    to the two central fixture zones."""
+    pos = _mast_positions()
+    feats: list[dict[str, Any]] = []
+    for sid in site_ids:
+        p = pos.get(str(sid))
+        if not p:
+            continue
+        feats.append({
+            "type": "Feature",
+            "properties": {"id": f"dz-{sid}", "severity": "critical"},
+            "geometry": _box_polygon(p[0], p[1]),
+        })
+    return feats
+
+
+# Pre-rendered outages, one per HUD scenario (nemoray/lib/scenarios.ts Scenario.outage.siteIds).
+# The ids are real EE/Orange masts from masts.geojson clustered over each incident's epicentre,
+# so "simulate the scenario's outage" opens holes in a believable place with no operator
+# selection. Keep this in sync with the frontend's seedDeactivated/outage ids.
+OUTAGE_CATALOG: dict[str, list[str]] = {
+    "high-demand": ["TQ3263381285", "TQ3250081280", "TQ3248081251"],
+    "major-event": ["TQ3776480097", "TQ3755080270", "TQ3776079840"],
+    "infrastructure-loss": ["TQ3070081830", "TQ3054081790", "TQ3064081980"],
+    "power-outage": ["TQ3448082620", "TQ3483082690", "TQ3481082720"],
+}
+# Used when the operator selected nothing and gave no (or the nominal "live") scenario.
+DEFAULT_OUTAGE_SCENARIO = "infrastructure-loss"
+
+
+def resolve_outage_site_ids(
+    site_ids: list[str] | None, scenario: str | None = None
+) -> list[str]:
+    """The masts an outage should disable: the explicit selection if any, else the active
+    scenario's pre-rendered set, else the default. Never empty — so the agent always has a real
+    outage to simulate (this is what kills the old empty-ids → placeholder loop)."""
+    if site_ids:
+        return list(site_ids)
+    if scenario and scenario in OUTAGE_CATALOG:
+        return list(OUTAGE_CATALOG[scenario])
+    return list(OUTAGE_CATALOG[DEFAULT_OUTAGE_SCENARIO])
+
+
 # Human-facing labels for the tool cards (mirrors TOOL_LABELS in lib/mock/agent.ts).
 TOOL_LABELS: dict[str, str] = {
     "run_sionna_coverage": "Run Sionna Coverage",
@@ -99,6 +193,9 @@ TOOL_LABELS: dict[str, str] = {
     "deploy_cow": "Deploy Cell-on-Wheels",
     "check_starlink": "Check Starlink Backhaul",
     "find_nearest": "Find Nearest Service",
+    "locate_place": "Locate Place",
+    "nearby_places": "Scan Surroundings",
+    "describe_network": "Network Overview",
 }
 
 
@@ -229,17 +326,19 @@ class ToolRegistry:
             "Simulate one or more existing masts going offline (a breakdown). Re-runs the "
             "Sionna RT coverage twin with those sites disabled and reports the new dead "
             "zones AND which emergency-service buildings (police, fire, hospitals) fall "
-            "inside them and therefore lose service.",
+            "inside them and therefore lose service. Call with no site_ids to simulate the "
+            "active scenario's pre-rendered outage.",
             {
                 "type": "object",
                 "properties": {
                     "site_ids": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Existing mast/site ids to take offline.",
+                        "description": "Existing mast/site ids to take offline. Omit to use "
+                        "the active scenario's pre-rendered outage.",
                     }
                 },
-                "required": ["site_ids"],
+                "required": [],
             },
             self._simulate_outage,
         )
@@ -277,6 +376,17 @@ class ToolRegistry:
                     },
                     "max_km": {"type": "number", "description": "Max tow distance (default 3)."},
                     "height_m": {"type": "number", "description": "COW height (default 20)."},
+                    "scenario": {
+                        "type": "string",
+                        "description": "Active scenario id — selects the outage's dead zones "
+                        "when disabled_site_ids is omitted.",
+                    },
+                    "keep_overlay": {
+                        "type": "boolean",
+                        "description": "Keep the outage's dead-zone + affected-building "
+                        "highlights on the map instead of clearing them (use after "
+                        "simulate_outage so the full incident stays painted).",
+                    },
                 },
                 "required": [],
             },
@@ -318,6 +428,82 @@ class ToolRegistry:
                 "required": ["kind"],
             },
             self._find_nearest,
+        )
+        self._add(
+            "locate_place",
+            "Point the operator's camera at a NAMED place from the knowledge graph and "
+            "highlight it: a London landmark, area, transport hub, stadium, park, museum or "
+            "government building (e.g. 'Tower Bridge', 'Canary Wharf', \"King's Cross\"), OR a "
+            "named emergency-service building (e.g. \"Guy's Hospital\", 'Charing Cross Police "
+            "Station'). Use this whenever the operator says 'show me X', 'fly to X', 'where is "
+            "X', 'take me to X' for a place that has a name. Resolves fuzzy/partial names.",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The place name to find (landmark, area, station, "
+                        "hospital, etc.). Partial/approximate names are resolved.",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": [
+                            "area", "landmark", "attraction", "transport", "stadium", "park",
+                            "museum", "government", "hospital", "police", "fire",
+                        ],
+                        "description": "Optional: restrict resolution to one category (e.g. "
+                        "'hospital' to disambiguate a hospital name).",
+                    },
+                    "zoom": {"type": "number", "description": "Optional camera zoom override."},
+                },
+                "required": ["query"],
+            },
+            self._locate_place,
+        )
+        self._add(
+            "nearby_places",
+            "List what's AROUND a place or point and frame the camera on the cluster — the "
+            "knowledge-graph neighbourhood. Give a place name ('near the Shard') or lat/lng, an "
+            "optional radius, and optional category filter, to get the nearest landmarks and "
+            "emergency services with distances. Use for 'what's near X', 'what hospitals are "
+            "around X', 'what's in this area'. (For the single closest service of one kind, "
+            "prefer find_nearest.)",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Place name to centre on (resolved via the knowledge "
+                        "graph). Omit to use lat/lng or the last-placed COW.",
+                    },
+                    "lat": {"type": "number", "description": "Centre latitude (if no query)."},
+                    "lng": {"type": "number", "description": "Centre longitude (if no query)."},
+                    "radius_km": {"type": "number", "description": "Search radius (default 1.5)."},
+                    "categories": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "area", "landmark", "attraction", "transport", "stadium",
+                                "park", "museum", "government", "hospital", "police", "fire",
+                            ],
+                        },
+                        "description": "Optional category filter (e.g. ['hospital','fire']).",
+                    },
+                },
+                "required": [],
+            },
+            self._nearby_places,
+        )
+        self._add(
+            "describe_network",
+            "Summarise the simulated ESN network the same way the operator's dashboard does: "
+            "how many EE masts, modelled buildings and radio cells, the % served, the number of "
+            "coverage holes (dead zones), and the GPU/ray-tracing telemetry — and frame the "
+            "camera over the whole simulated area. Use for 'how big is the network', 'what's "
+            "the coverage', 'give me a network overview / status'.",
+            {"type": "object", "properties": {}, "required": []},
+            self._describe_network,
         )
 
     def _add(
@@ -647,16 +833,11 @@ class ToolRegistry:
         """Offline dead zones for the GPU-free demo: ~500 m boxes over two central-London
         clusters that really do contain emergency-service buildings (Charing Cross and
         Holborn police districts), so `buildings_in_zones` lights up without the twin."""
-        def box(lng: float, lat: float, h: float = 0.0035) -> dict[str, Any]:
-            ring = [[lng - h, lat - h], [lng + h, lat - h],
-                    [lng + h, lat + h], [lng - h, lat + h], [lng - h, lat - h]]
-            return {"type": "Polygon", "coordinates": [ring]}
-
         return [
             {"type": "Feature", "properties": {"id": "dz-charing-cross", "severity": "critical"},
-             "geometry": box(-0.1249, 51.5097)},
+             "geometry": _box_polygon(-0.1249, 51.5097)},
             {"type": "Feature", "properties": {"id": "dz-holborn", "severity": "major"},
-             "geometry": box(-0.1174, 51.5208)},
+             "geometry": _box_polygon(-0.1174, 51.5208)},
         ]
 
     @staticmethod
@@ -669,29 +850,33 @@ class ToolRegistry:
     # ── new resilience tools ────────────────────────────────────────────────────
     def _simulate_outage(self, args: dict[str, Any]) -> ToolResult:
         """Breakdown of existing mast(s) → new dead zones + the emergency-service buildings
-        inside them. Real via the twin (Sionna RT tower-down); fixture otherwise."""
+        inside them. Real via the twin (Sionna RT tower-down); fixture otherwise. With no
+        site_ids it simulates the active scenario's pre-rendered outage (never a no-op)."""
         from .emergency import buildings_in_zones, feature_centroid
 
-        site_ids = args.get("site_ids") or args.get("disabled_cells") or []
+        explicit = args.get("site_ids") or args.get("disabled_cells") or []
+        site_ids = resolve_outage_site_ids(
+            list(explicit) if explicit else None, args.get("scenario")
+        )
         twin = self._twin_url()
         source = "fixture"
         summary: dict[str, Any] = {}
         feats: list[dict[str, Any]] = []
 
-        if twin and site_ids:
+        if twin:
             res = self._post_coverage(twin, list(site_ids))
             if res is not None and res[0].get("disabled_matched"):
                 summary, feats = res
                 source = "Sionna RT coverage twin"
 
         if source == "fixture":
-            if not twin:
-                _warn_fallback("simulate_outage", "TWIN_URL not set")
-            elif not site_ids:
-                _warn_fallback("simulate_outage", "no site_ids provided to disable")
-            else:
-                _warn_fallback("simulate_outage", "twin unreachable or no site matched")
-            feats = self._fixture_zones()
+            _warn_fallback(
+                "simulate_outage",
+                "TWIN_URL not set" if not twin else "twin unreachable or no site matched",
+            )
+            # Draw holes where the downed masts actually stood; fall back to the central pair
+            # only if no mast position resolves (masts.geojson artifact missing).
+            feats = _zones_for_sites(site_ids) or self._fixture_zones()
 
         affected = buildings_in_zones(feats)
         counts = self._summarise_buildings(affected)
@@ -823,16 +1008,21 @@ class ToolRegistry:
             load_emergency_buildings,
             load_fire_stations,
             nearest_depot,
+            restoration_eta,
         )
 
-        disabled = list(args.get("disabled_site_ids") or [])
+        disabled = resolve_outage_site_ids(
+            list(args.get("disabled_site_ids") or []) or None, args.get("scenario")
+        )
         max_km = float(args.get("max_km", COW_MAX_KM))
         height = float(args.get("height_m", COW_HEIGHT_M))
         radius_km = COW_COVERAGE_KM
 
         twin = self._twin_url()
         holes = self._fetch_twin_holes(twin) if twin else None
-        feats = holes or self._fixture_zones()
+        # Fixture: place the COW against the SAME dead zones the outage opened (holes around the
+        # downed masts), so the deployment is consistent with simulate_outage's map.
+        feats = holes or _zones_for_sites(disabled) or self._fixture_zones()
         if not holes:
             _warn_fallback(
                 "deploy_cow",
@@ -908,6 +1098,10 @@ class ToolRegistry:
                 _warn_fallback("deploy_cow", "twin unreachable — COW hole-closure not verified")
 
         depot = best["depot"]
+        # Traffic-aware restoration ETA: how long until the COW is on-site and serving — drive
+        # from the depot (great-circle tow × road factor, scaled by current traffic) + dispatch
+        # + setup. Same model as nemoray/lib/geo/restoration.ts drives the scenario timeline.
+        eta = restoration_eta(best["tow_km"])
         tail = (
             f"holes {verified['holes_before']}→{verified['holes_after']} after COW"
             if verified else "set TWIN_URL to verify hole closure via Sionna RT"
@@ -930,20 +1124,26 @@ class ToolRegistry:
             "id": "cow-source", "position": [depot["lng"], depot["lat"]], "kind": "station",
             "label": depot["name"], "detail": f"COW source · {best['tow_km']} km tow",
         }
-        ui: list[dict[str, Any]] = [
-            {"op": "clear"},
-            {
-                "op": "cow",
-                "cow": cow_marker,
-                "station": station_marker,
-                "route": [[depot["lng"], depot["lat"]], [cow["lng"], cow["lat"]]],
-                "focus": {"center": [cow["lng"], cow["lat"]], "zoom": 13.5, "pitch": 45},
-            },
-        ]
+        # keep_overlay layers the COW on top of the outage zones + affected-building markers
+        # (the scenario macro sets it) instead of wiping them — so the final map shows the dead
+        # zone, the emergency buildings hit, AND the COW + its source station together.
+        ui: list[dict[str, Any]] = []
+        if not args.get("keep_overlay"):
+            ui.append({"op": "clear"})
+        ui.append({
+            "op": "cow",
+            "cow": cow_marker,
+            "station": station_marker,
+            "route": [[depot["lng"], depot["lat"]], [cow["lng"], cow["lat"]]],
+            "focus": {"center": [cow["lng"], cow["lat"]], "zoom": 13.5, "pitch": 45},
+        })
         return ToolResult(
             result=f"Deploy COW from {depot['name']} ({best['tow_km']} km tow) to "
             f"({best['lat']}, {best['lng']}) @ {height:.0f} m — covers a {radius_km:.0f} km "
-            f"radius, protecting {best['buildings_protected']} emergency building(s); {tail}",
+            f"radius, protecting {best['buildings_protected']} emergency building(s). "
+            f"Coverage restored in ~{eta['total_min']:.0f} min "
+            f"({eta['drive_min']:.0f} min tow at traffic ×{eta['traffic_factor']}, "
+            f"{eta['setup_min']:.0f} min setup); {tail}",
             observation={
                 "cow": cow,
                 "coverage_radius_km": radius_km,
@@ -955,6 +1155,7 @@ class ToolRegistry:
                 "candidate_count": len(candidates),
                 "reachable_count": len(reachable),
                 "alternatives": shortlist,
+                "restoration": eta,
                 "verified": verified,
                 "feasible": True,
                 "source": "Sionna RT coverage twin" if verified else "fixture",
@@ -1094,6 +1295,192 @@ class ToolRegistry:
                 "name": best["name"], "kind": kind, "distance_km": round(km, 2),
                 "position": {"lat": best["lat"], "lng": best["lng"]},
                 "source": "data/emergency",
+            },
+            ui_actions=ui,
+        )
+
+    # ── knowledge graph: locate a named place / scan surroundings / network overview ──
+    # These read the spatial knowledge graph in places.py (the curated gazetteer the dashboard
+    # map labels are drawn from, UNIONed with the emergency-service buildings) so the agent
+    # resolves any name the operator can see and flies the camera to it. No GPU/twin needed.
+    @staticmethod
+    def _is_emergency_cat(category: str) -> bool:
+        return category in ("police", "fire", "hospital")
+
+    def _locate_place(self, args: dict[str, Any]) -> ToolResult:
+        """Resolve a NAMED place from the knowledge graph and fly the camera to it — the
+        headline 'point the camera' tool. Works for landmarks/areas/transport/etc. AND named
+        emergency buildings; remembers it as the last reference for follow-up nearby queries."""
+        from .places import category_zoom, in_coverage, resolve_place, suggest_places
+
+        query = (args.get("query") or args.get("name") or args.get("place") or "").strip()
+        if not query:
+            return ToolResult(
+                result="locate_place needs a place name (query).",
+                observation={"error": "no query"},
+            )
+        cat = (args.get("category") or "").strip().lower()
+        cats = (cat,) if cat else None
+        node = resolve_place(query, categories=cats)
+        if node is None:
+            sugg = suggest_places(query)
+            hint = f" Closest names: {', '.join(sugg)}." if sugg else ""
+            return ToolResult(
+                result=f"Couldn't find '{query}' in the knowledge graph.{hint}",
+                observation={"error": "unresolved", "query": query, "suggestions": sugg},
+            )
+        lat, lng = float(node["lat"]), float(node["lng"])
+        # Remember as the reference point so a follow-up nearby_places/find_nearest can default
+        # to "around the place we just flew to" (mirrors deploy_cow → check_starlink chaining).
+        self._last_cow = {"lat": lat, "lng": lng, "label": node["name"]}
+        zoom = args.get("zoom")
+        zoom = float(zoom) if zoom is not None else category_zoom(node["category"])
+        is_em = self._is_emergency_cat(node["category"])
+        marker = {
+            "id": "located", "position": [lng, lat],
+            "kind": "building" if is_em else "poi",
+            "label": node["name"],
+            "detail": node["description"] or node["category"].title(),
+        }
+        ui = [
+            {"op": "clear"},
+            {"op": "markers", "markers": [marker],
+             "focus": {"center": [lng, lat], "zoom": zoom, "pitch": 45}},
+        ]
+        cov = in_coverage(lat, lng)
+        cov_note = " (note: outside the simulated coverage area)" if cov is False else ""
+        desc = (node["description"] or node["category"].title()).rstrip(".")
+        return ToolResult(
+            result=f"{node['name']} — {desc}. Flown to and highlighted on the map{cov_note}.",
+            observation={
+                "name": node["name"],
+                "category": node["category"],
+                "position": {"lat": round(lat, 6), "lng": round(lng, 6)},
+                "match_score": node["match_score"],
+                "in_coverage": cov,
+                "source": "knowledge-graph",
+            },
+            ui_actions=ui,
+        )
+
+    def _nearby_places(self, args: dict[str, Any]) -> ToolResult:
+        """Knowledge-graph neighbourhood around a named place or point: the nearest landmarks
+        and emergency services, markers dropped and the camera framed on the cluster."""
+        from .places import nearby_places as kg_nearby
+        from .places import resolve_place, suggest_places
+
+        query = (args.get("query") or args.get("near") or "").strip()
+        center_name = None
+        exclude_id = None
+        if query:
+            node = resolve_place(query)
+            if node is None:
+                sugg = suggest_places(query)
+                hint = f" Closest names: {', '.join(sugg)}." if sugg else ""
+                return ToolResult(
+                    result=f"Couldn't find '{query}' to scan around.{hint}",
+                    observation={"error": "unresolved", "query": query, "suggestions": sugg},
+                )
+            lat, lng = float(node["lat"]), float(node["lng"])
+            center_name = node["name"]
+            exclude_id = node["id"]
+        else:
+            lat, lng = args.get("lat"), args.get("lng")
+            if lat is None or lng is None:
+                ref = self._last_cow or {}
+                lat = ref.get("lat", self._DEFAULT_REF[0])
+                lng = ref.get("lng", self._DEFAULT_REF[1])
+                center_name = ref.get("label") or ("the deployed COW" if self._last_cow
+                                                   else "central London")
+            lat, lng = float(lat), float(lng)
+
+        radius = float(args.get("radius_km") or 1.5)
+        raw_cats = args.get("categories") or args.get("kinds") or None
+        cats = tuple(str(c).strip().lower() for c in raw_cats) if raw_cats else None
+        found = kg_nearby(lat, lng, radius, categories=cats, limit=12, exclude_id=exclude_id)
+
+        anchor = center_name or f"({lat:.4f}, {lng:.4f})"
+        if not found:
+            return ToolResult(
+                result=f"Nothing in the knowledge graph within {radius:.1f} km of {anchor}.",
+                observation={"center": {"lat": lat, "lng": lng}, "radius_km": radius,
+                             "results": [], "source": "knowledge-graph"},
+            )
+        markers = [
+            {"id": f"near-{i}", "position": [n["lng"], n["lat"]],
+             "kind": "building" if self._is_emergency_cat(n["category"]) else "poi",
+             "label": n["name"], "detail": f"{n['category'].title()} · {n['distance_km']:.1f} km"}
+            for i, n in enumerate(found)
+        ]
+        # Frame the camera on the centre + everything found (a padded bbox over all points).
+        lngs = [lng] + [n["lng"] for n in found]
+        lats = [lat] + [n["lat"] for n in found]
+        pad = 0.004
+        bbox = [min(lngs) - pad, min(lats) - pad, max(lngs) + pad, max(lats) + pad]
+        ui = [
+            {"op": "clear"},
+            {"op": "markers", "markers": markers,
+             "focus": {"bbox": [round(x, 6) for x in bbox], "pitch": 35}},
+        ]
+        top = ", ".join(f"{n['name']} ({n['distance_km']:.1f} km)" for n in found[:4])
+        return ToolResult(
+            result=f"{len(found)} place(s) within {radius:.1f} km of {anchor}: {top}"
+            + ("…" if len(found) > 4 else "") + " — highlighted on the map.",
+            observation={
+                "center": {"name": center_name, "lat": round(lat, 6), "lng": round(lng, 6)},
+                "radius_km": radius,
+                "results": [
+                    {"name": n["name"], "category": n["category"],
+                     "distance_km": n["distance_km"]}
+                    for n in found
+                ],
+                "source": "knowledge-graph",
+            },
+            ui_actions=ui,
+        )
+
+    def _describe_network(self, args: dict[str, Any]) -> ToolResult:
+        """Network overview from the pipeline summary the HUD KPI panels read, with the camera
+        framed over the whole simulated area."""
+        from .places import coverage_bounds, load_network_summary
+
+        s = load_network_summary()
+        if not s:
+            return ToolResult(
+                result="No coverage summary is available yet — run the Sionna RT pipeline first.",
+                observation={"error": "no summary", "source": "none"},
+            )
+        sites = s.get("sites_total")
+        served = s.get("served_pct")
+        holes = s.get("low_coverage_polys")
+        buildings = s.get("buildings")
+        cells = s.get("simulated_cells")
+        rays = s.get("ray_paths")
+        perf = s.get("performance") or {}
+        bits = []
+        if sites is not None:
+            bits.append(f"{sites:,} EE masts")
+        if buildings is not None:
+            bits.append(f"{buildings:,} buildings modelled")
+        if served is not None:
+            bits.append(f"{served:.1f}% served")
+        if holes is not None:
+            bits.append(f"{holes} coverage hole(s)")
+        device = perf.get("device")
+        summary_line = "Network: " + ", ".join(bits) + (f" · {device}" if device else "") + "."
+        ui: list[dict[str, Any]] = []
+        cb = coverage_bounds()
+        if cb:
+            ui = [{"op": "focus",
+                   "focus": {"bbox": [cb["west"], cb["south"], cb["east"], cb["north"]],
+                             "pitch": 30}}]
+        return ToolResult(
+            result=summary_line + (" Camera framed on the simulated area." if cb else ""),
+            observation={
+                "sites_total": sites, "served_pct": served, "coverage_holes": holes,
+                "buildings": buildings, "simulated_cells": cells, "ray_paths": rays,
+                "performance": perf or None, "coverage_bounds": cb,
+                "source": "pipeline summary.json",
             },
             ui_actions=ui,
         )

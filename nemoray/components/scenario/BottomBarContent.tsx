@@ -2,6 +2,7 @@
 
 import { EventTimeline } from "@/components/scenario/EventTimeline";
 import { ScenarioTabs } from "@/components/scenario/ScenarioTabs";
+import { useScenarioTimeline } from "@/hooks/useScenarioTimeline";
 import { cn } from "@/lib/cn";
 
 /**
@@ -10,6 +11,9 @@ import { cn } from "@/lib/cn";
  * the bottom-bar region.
  */
 export function BottomBarContent({ className }: { className?: string }) {
+  // Recompute the active scenario's restoration timeline (traffic-aware) on scenario change.
+  useScenarioTimeline();
+
   return (
     <div
       className={cn(

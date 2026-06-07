@@ -68,6 +68,9 @@ class AgentRequest(BaseModel):
     history: list[Turn] | None = None
     # Mast ids the operator clicked on the map (multi-select targets for the action).
     selected_site_ids: list[str] | None = None
+    # Active HUD scenario id (e.g. "infrastructure-loss") — selects the pre-rendered outage
+    # when the operator hasn't picked specific masts.
+    scenario: str | None = None
 
 
 def _event_text(body: AgentRequest) -> str:
@@ -82,6 +85,9 @@ def _event_text(body: AgentRequest) -> str:
         # model passes them to simulate_outage / move_mast instead of guessing.
         base += ("\n\n[Operator has selected these mast ids on the map: "
                  + ", ".join(body.selected_site_ids) + "]")
+    if body.scenario and body.scenario != "live":
+        # Operational context: simulate_outage with no ids uses this scenario's outage.
+        base += f"\n\n[Active scenario: {body.scenario}]"
     return base
 
 
@@ -93,17 +99,17 @@ def _nim_reachable(base_url: str) -> bool:
         return False
 
 
-def _make_planner(selected: list[str] | None = None) -> Planner:
+def _make_planner(selected: list[str] | None = None, scenario: str | None = None) -> Planner:
     """Pick the planner. AGENT_LLM = nim | stub | auto (default).
     `auto` uses the NIM when its /v1/models is reachable, else the offline stub."""
     mode = os.getenv("AGENT_LLM", "auto").strip().lower()
     base_url = os.getenv("NEMOTRON_BASE_URL", NEMOTRON_BASE_URL)
     if mode == "stub":
-        return StubPlanner(selected_site_ids=selected)
+        return StubPlanner(selected_site_ids=selected, scenario=scenario)
     if mode == "nim" or (mode == "auto" and _nim_reachable(base_url)):
         return LlamaCppPlanner(base_url=base_url,
                                model=os.getenv("NEMOTRON_MODEL", NEMOTRON_MODEL))
-    return StubPlanner(selected_site_ids=selected)
+    return StubPlanner(selected_site_ids=selected, scenario=scenario)
 
 
 def _sse(frames: Iterator[dict[str, Any]]) -> Iterator[str]:
@@ -205,7 +211,7 @@ def starlink_track(lat: float, lng: float, minutes: int = 12, step_s: int = 15) 
 def agent(body: AgentRequest) -> StreamingResponse:
     """Stream the agent run as Server-Sent Events of `AgentStreamEvent` frames."""
     history = [t.model_dump() for t in body.history] if body.history else None
-    planner = _make_planner(body.selected_site_ids)
+    planner = _make_planner(body.selected_site_ids, body.scenario)
     frames = run_agent(_event_text(body), planner=planner, history=history)
     # The agent generator does blocking I/O (httpx) in live mode; run it in a
     # threadpool so it doesn't stall the event loop.

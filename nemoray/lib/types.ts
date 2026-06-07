@@ -76,7 +76,6 @@ export type ScenarioId =
   | "high-demand"
   | "major-event"
   | "infrastructure-loss"
-  | "cyber-attack"
   | "power-outage";
 
 export type EventKind =
@@ -94,6 +93,17 @@ export interface EventMarker {
   label: string;
   severity?: "info" | "warning" | "critical";
   siteId?: SiteId;
+  /** Optional secondary line (e.g. "14 min · traffic ×1.3") shown in tooltips/track rows. */
+  detail?: string;
+}
+
+/** A scenario's pre-rendered outage: the masts that go down and where the hole opens. */
+export interface ScenarioOutage {
+  /** Real mast ids taken offline (mirrors the agent's OUTAGE_CATALOG). */
+  siteIds: SiteId[];
+  /** Outage centre [lng, lat] — the COW dispatch target for the restoration ETA. */
+  epicenter: LngLat;
+  severity: "major" | "critical";
 }
 
 export interface Scenario {
@@ -106,9 +116,31 @@ export interface Scenario {
   /** Timeline span in ms. */
   durationMs: number;
   synthetic: boolean;
+  /** Pre-rendered outage this scenario simulates (absent for the nominal "live" feed). */
+  outage?: ScenarioOutage;
 }
 
 export type TimelineMode = "live" | "playback";
+
+/**
+ * Traffic-aware Cell-on-Wheels restoration estimate for a scenario's outage. Computed by
+ * `lib/geo/restoration.ts` (mirrors the agent's `emergency.restoration_eta`). Drives the
+ * scenario timeline phases + the RESTORATION ETA readout.
+ */
+export interface RestorationPlan {
+  /** Nearest fire-station depot the COW is towed from. */
+  stationName: string;
+  /** Minutes: crew muster + hook-up before rolling. */
+  dispatchMin: number;
+  /** Minutes: traffic-scaled drive from depot to the outage. */
+  driveMin: number;
+  /** Minutes: park, raise mast, bring cell + Starlink uplink online. */
+  setupMin: number;
+  /** Minutes: dispatch + drive + setup (rounded). */
+  totalMin: number;
+  /** Time-of-day congestion factor applied to the drive. */
+  trafficFactor: number;
+}
 
 // ── agent + tools ───────────────────────────────────────────────────────────
 export type AgentRole = "agent" | "operator" | "system";
@@ -133,7 +165,10 @@ export type ToolName =
   | "move_mast"
   | "deploy_cow"
   | "check_starlink"
-  | "find_nearest";
+  | "find_nearest"
+  | "locate_place"
+  | "nearby_places"
+  | "describe_network";
 
 export type ToolStatus = "queued" | "running" | "success" | "error";
 

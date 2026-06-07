@@ -8,12 +8,14 @@ interface AgentBody {
   trigger?: { kind: "site_down"; siteId: string; siteName: string };
   history?: { role: AgentRole; content: string }[];
   selectedSiteIds?: string[];
+  scenario?: string;
 }
 
 /**
  * Translate the HUD request into the Python agent's wire shape: conversation roles
- * map operator→user / agent→assistant (system turns are dropped), and the map
- * selection becomes `selected_site_ids`. `prompt`/`trigger` pass straight through
+ * map operator→user / agent→assistant (system turns are dropped), the map selection
+ * becomes `selected_site_ids`, and the active scenario becomes `scenario` (the
+ * backend's pre-rendered-outage selector). `prompt`/`trigger` pass straight through
  * (the trigger's siteId/siteName already match the backend's pydantic model).
  */
 function toAgentPayload(body: AgentBody): Record<string, unknown> {
@@ -25,6 +27,7 @@ function toAgentPayload(body: AgentBody): Record<string, unknown> {
     trigger: body.trigger,
     history: history.length > 0 ? history : undefined,
     selected_site_ids: body.selectedSiteIds,
+    scenario: body.scenario,
   };
 }
 

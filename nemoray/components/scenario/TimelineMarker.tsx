@@ -37,7 +37,12 @@ export function TimelineMarker({
       content={
         <div className="flex items-start gap-2">
           <span className="nm-readout shrink-0 text-nv-bright">{formatClock(event.tMs)}</span>
-          <span className="text-ink-dim">{event.label}</span>
+          <span className="flex flex-col">
+            <span className="text-ink-dim">{event.label}</span>
+            {event.detail && (
+              <span className="nm-readout text-[10px] text-ink-faint">{event.detail}</span>
+            )}
+          </span>
         </div>
       }
     >

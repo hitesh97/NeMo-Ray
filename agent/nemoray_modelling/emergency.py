@@ -38,6 +38,47 @@ COW_COVERAGE_KM = 2.0
 # A COW mast is short — used as the antenna height for its ray-tracing (todo: 20 m).
 COW_HEIGHT_M = 20.0
 
+# ── Cell-on-Wheels restoration ETA (synthetic, traffic-aware) ────────────────────
+# Mirrors nemoray/lib/geo/restoration.ts — keep the constants in sync. The straight-line tow
+# distance underestimates road distance, so inflate it; the drive time then scales with the
+# time-of-day traffic multiplier. Dispatch + on-site setup are fixed overheads.
+ROAD_WINDING = 1.4          # road distance ≈ great-circle × this
+COW_SPEED_KMH = 30.0        # mean tow speed through London streets (free-flow)
+DISPATCH_MIN = 4.0          # crew muster + hook up the COW before rolling
+COW_SETUP_MIN = 12.0        # park, raise the mast, bring the cell + Starlink uplink online
+
+
+def traffic_multiplier(hour_utc: int) -> float:
+    """Congestion factor by hour of day (UTC ≈ London). Rush hours slow the tow."""
+    if 7 <= hour_utc <= 9 or 16 <= hour_utc <= 18:
+        return 1.6            # peak
+    if 10 <= hour_utc <= 15:
+        return 1.25           # daytime
+    if 19 <= hour_utc <= 21:
+        return 1.15           # evening
+    return 1.0                # overnight free-flow
+
+
+def restoration_eta(tow_km: float, hour_utc: int | None = None) -> dict[str, float]:
+    """Synthetic, traffic-aware restoration breakdown for a COW towed `tow_km` (great-circle)
+    from its depot. Returns dispatch / drive / setup / total minutes + the traffic factor."""
+    from datetime import UTC, datetime
+
+    if hour_utc is None:
+        hour_utc = datetime.now(UTC).hour
+    factor = traffic_multiplier(hour_utc)
+    road_km = tow_km * ROAD_WINDING
+    drive_min = road_km / COW_SPEED_KMH * 60.0 * factor
+    total = DISPATCH_MIN + drive_min + COW_SETUP_MIN
+    return {
+        "dispatch_min": round(DISPATCH_MIN, 1),
+        "drive_min": round(drive_min, 1),
+        "setup_min": round(COW_SETUP_MIN, 1),
+        "total_min": round(total),
+        "traffic_factor": factor,
+        "road_km": round(road_km, 2),
+    }
+
 
 def _repo_root() -> Path:
     """Repo root (holds data/emergency). Overridable with NEMORAY_ROOT for odd layouts."""
@@ -52,8 +93,16 @@ def _repo_root() -> Path:
     return here.parents[2]
 
 
-def _data_dir() -> Path:
-    return _repo_root() / "data" / "emergency"
+def _csv_path(filename: str) -> Path:
+    """Resolve an emergency CSV, **preferring the HUD's copy** (`nemoray/data/`) so the agent
+    reads exactly what the operator sees on the map, then the agent-local `data/emergency/`
+    copy. (The two have diverged; the dashboard is canonical — see the knowledge-graph sync.)"""
+    root = _repo_root()
+    for rel in ("nemoray/data", "data/emergency"):
+        p = root / rel / filename
+        if p.exists():
+            return p
+    return root / "data" / "emergency" / filename
 
 
 def _to_float(s: Any) -> float | None:
@@ -77,7 +126,7 @@ def load_fire_stations() -> tuple[dict[str, Any], ...]:
     official LFB "holdings" list (~116 rows: stations + a few workshops/annexes), which is
     fine for depot/tow-range purposes.
     """
-    path = _data_dir() / "fire-stations-london.csv"
+    path = _csv_path("fire-stations-london.csv")
     out: list[dict[str, Any]] = []
     if not path.exists():
         return tuple(out)
@@ -103,7 +152,7 @@ def load_fire_stations() -> tuple[dict[str, Any], ...]:
 @lru_cache(maxsize=1)
 def load_police_stations() -> tuple[dict[str, Any], ...]:
     """Police stations (MOPAC). WGS84 already. Used for building-impact (not COW depots)."""
-    path = _data_dir() / "police-stations-london.csv"
+    path = _csv_path("police-stations-london.csv")
     out: list[dict[str, Any]] = []
     if not path.exists():
         return tuple(out)
@@ -138,7 +187,7 @@ def load_emergency_buildings() -> tuple[dict[str, Any], ...]:
                     "lat": fstn["lat"], "lng": fstn["lng"]})
 
     # Hospitals (WGS84 lat,lng), clipped to London.
-    hosp = _data_dir() / "hospitals-england.csv"
+    hosp = _csv_path("hospitals-england.csv")
     if hosp.exists():
         with open(hosp, newline="") as f:
             for row in csv.DictReader(f):

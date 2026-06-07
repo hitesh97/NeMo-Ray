@@ -4,7 +4,7 @@ import { delay } from "@/lib/api/client";
 import { type VadState } from "@/hooks/useVoice";
 import type { AgentRequest } from "@/lib/api/agent";
 import { DEFAULT_LAYERS } from "@/lib/layers";
-import { DEFAULT_SCENARIO, SCENARIOS } from "@/lib/scenarios";
+import { DEFAULT_SCENARIO, SCENARIOS, scenarioFromText } from "@/lib/scenarios";
 import type {
   AgentMapState,
   AgentMessage,
@@ -23,6 +23,7 @@ import type {
   LeftRailTab,
   Proposal,
   ProposalStatus,
+  RestorationPlan,
   RightRailTab,
   Scenario,
   ScenarioId,
@@ -77,12 +78,16 @@ interface NemoState {
   playing: boolean;
   speed: number;
   events: EventMarker[];
+  /** Traffic-aware restoration estimate for the active scenario's outage (null when nominal). */
+  restoration: RestorationPlan | null;
   play(): void;
   pause(): void;
   seek(ms: number): void;
   setLive(): void;
   setSpeed(n: number): void;
   tick(dtMs: number): void;
+  /** Replace the timeline + restoration plan (computed by useScenarioTimeline). */
+  setTimeline(events: EventMarker[], durationMs: number, restoration: RestorationPlan | null): void;
 
   // ── agent ──
   messages: AgentMessage[];
@@ -191,6 +196,8 @@ export const useNemoStore = create<NemoState>((set, get) => ({
       positionMs: scenario.durationMs,
       timelineMode: "live",
       playing: false,
+      // Cleared here; useScenarioTimeline recomputes it for the new scenario's outage.
+      restoration: null,
     });
   },
 
@@ -272,6 +279,7 @@ export const useNemoStore = create<NemoState>((set, get) => ({
   playing: false,
   speed: 1,
   events: SCENARIOS[DEFAULT_SCENARIO].events,
+  restoration: null,
   play: () => set({ playing: true, timelineMode: "playback" }),
   pause: () => set({ playing: false }),
   seek: (ms) =>
@@ -288,6 +296,8 @@ export const useNemoStore = create<NemoState>((set, get) => ({
       if (next >= st.durationMs) return { positionMs: st.durationMs, playing: false, timelineMode: "live" };
       return { positionMs: next };
     }),
+  setTimeline: (events, durationMs, restoration) =>
+    set({ events, durationMs, positionMs: durationMs, timelineMode: "live", playing: false, restoration }),
 
   // ── agent ──
   messages: [],
@@ -304,6 +314,13 @@ export const useNemoStore = create<NemoState>((set, get) => ({
     })),
   requestAgentRun: (req) => {
     agentNonce += 1;
+    // If the operator's prompt names a scenario ("run the power outage scenario"), flip the HUD
+    // scenario switch FIRST — so the map, timeline and outage context all reflect it before the
+    // run is assembled below (the agent then drives the end-to-end response).
+    if (req.prompt) {
+      const sid = scenarioFromText(req.prompt);
+      if (sid && sid !== get().activeScenarioId) get().setScenario(sid);
+    }
     // Enrich the run with the context the backend agent needs: prior conversation
     // (so Nemotron can track back) and the masts the operator has selected on the
     // map (outage / move targets). `addOperatorMessage` runs before this on the
@@ -321,11 +338,19 @@ export const useNemoStore = create<NemoState>((set, get) => ({
     ) {
       history.pop();
     }
-    const selectedSiteIds = st.selectedSiteId ? [st.selectedSiteId] : undefined;
+    // The action targets: the masts the operator clicked, else the active scenario's
+    // pre-rendered outage — so "simulate the selected masts" acts on the scenario even with
+    // nothing hand-selected (this is the frontend half of the old placeholder-loop fix). The
+    // scenario id rides along too as the backend's fallback selector.
+    const activeScenario = st.scenarios[st.activeScenarioId];
+    const selectedSiteIds = st.selectedSiteId
+      ? [st.selectedSiteId]
+      : activeScenario.outage?.siteIds;
     const enriched: AgentRequest = {
       ...req,
       history: history.length > 0 ? history : undefined,
       selectedSiteIds: req.selectedSiteIds ?? selectedSiteIds,
+      scenario: req.scenario ?? st.activeScenarioId,
     };
     // A fresh run starts with a clean map — last turn's highlights are wiped (the new
     // run's tools repaint as they go). Keeps the overlay in sync with the conversation.
