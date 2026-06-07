@@ -36,5 +36,7 @@ Thumbs.db
 
 plans/
 datasets/
+docs/
+brev/
 # EA-LiDAR rasters (large; fetch via nemoray_modelling.lidar)
 modellingsim/data/lidar/*.tif
