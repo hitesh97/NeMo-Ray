@@ -145,7 +145,7 @@ def test_cuopt_and_coverage_show_all_not_one() -> None:
     markers = next((a["markers"] for a in cu.ui_actions if a.get("op") == "markers"), [])
     cands = cu.observation.get("candidates", [])
     if have_masts:
-        assert len(markers) > 1, f"run_cuopt emitted {len(markers)} marker(s) — expected the full plan"
+        assert len(markers) > 1, f"run_cuopt emitted {len(markers)} markers; expected many"
         assert len(cands) == len(markers), "observation candidates must match emitted markers"
         assert cu.observation["source"].startswith("cuOpt output artifact")
         # Exactly one marker is labelled — the recommended (highest-impact) pick.
@@ -153,7 +153,8 @@ def test_cuopt_and_coverage_show_all_not_one() -> None:
         # reject→retry recommends a DIFFERENT mast.
         pick1 = cu.observation["candidate"]["candidate_id"]
         cu2 = r.run("run_cuopt", {"exclude": [pick1]})
-        assert cu2.observation["candidate"]["candidate_id"] != pick1, "exclude didn't change the pick"
+        pick2 = cu2.observation["candidate"]["candidate_id"]
+        assert pick2 != pick1, "exclude didn't change the recommended pick"
         print(f"  run_cuopt: {len(markers)} candidate markers, 1 recommended, exclude reselects")
     else:
         print("  run_cuopt: no new_masts.geojson artifact — skipped (fresh clone)")
@@ -161,7 +162,7 @@ def test_cuopt_and_coverage_show_all_not_one() -> None:
     cov = r.run("run_sionna_coverage", {"disabled_cells": []})
     zones = next((a["zones"] for a in cov.ui_actions if a.get("op") == "zones"), [])
     if have_holes:
-        assert len(zones) > 1, f"run_sionna_coverage painted {len(zones)} zone(s) — expected all holes"
+        assert len(zones) > 1, f"coverage painted {len(zones)} zones; expected all holes"
         assert cov.observation["source"].startswith("coverage artifact")
         print(f"  run_sionna_coverage: {len(zones)} real dead zones painted")
     else:

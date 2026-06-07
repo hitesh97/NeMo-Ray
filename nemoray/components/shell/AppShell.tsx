@@ -8,6 +8,7 @@ import { BottomBar } from "@/components/panels/BottomBar";
 import { TooltipProvider } from "@/components/primitives";
 import { MapMount } from "@/components/map/MapMount";
 import { MapLegend } from "@/components/layers/MapLegend";
+import { CameraViewPanel } from "@/components/map/CameraViewPanel";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useNemoStore } from "@/store";
 import { CollapsiblePanel } from "./CollapsiblePanel";
@@ -53,6 +54,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
             {/* on-map key for the deck.gl vocabulary (rays / masts / services / …) */}
             <MapLegend />
+            {/* camera-view toggle (coverage ⇄ globe/Starlink) — bottom-right, above overlay */}
+            <div className="pointer-events-auto absolute bottom-3 right-3 z-20">
+              <CameraViewPanel />
+            </div>
           </main>
 
           <CollapsiblePanel
@@ -72,7 +77,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           label="Timeline · Scenarios"
           collapsed={panels.bottom}
           onToggle={() => togglePanel("bottom")}
-          expandedSize={150}
+          expandedSize={56}
         >
           <BottomBar />
         </CollapsiblePanel>

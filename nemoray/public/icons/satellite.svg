@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 64" width="128" height="64">
+  <!-- Left solar panel -->
+  <rect x="3" y="21" width="46" height="22" rx="2" fill="#0a1b38"/>
+  <rect x="3" y="21" width="46" height="22" rx="2" fill="none" stroke="#1e3d7a" stroke-width="0.9"/>
+  <!-- Left panel cell grid -->
+  <line x1="18" y1="21" x2="18" y2="43" stroke="#1e3d7a" stroke-width="0.7"/>
+  <line x1="33" y1="21" x2="33" y2="43" stroke="#1e3d7a" stroke-width="0.7"/>
+  <line x1="3" y1="32" x2="49" y2="32" stroke="#1e3d7a" stroke-width="0.7"/>
+  <!-- Left panel cell fills (give depth/texture) -->
+  <rect x="4" y="22" width="13" height="9" rx="0.5" fill="#0d2248" opacity="0.7"/>
+  <rect x="19" y="22" width="13" height="9" rx="0.5" fill="#0d2248" opacity="0.7"/>
+  <rect x="34" y="22" width="14" height="9" rx="0.5" fill="#0d2248" opacity="0.7"/>
+  <rect x="4" y="33" width="13" height="9" rx="0.5" fill="#0d2248" opacity="0.7"/>
+  <rect x="19" y="33" width="13" height="9" rx="0.5" fill="#0d2248" opacity="0.7"/>
+  <rect x="34" y="33" width="14" height="9" rx="0.5" fill="#0d2248" opacity="0.7"/>
+  <!-- Left panel cell specular glints -->
+  <rect x="4" y="22" width="4" height="2" rx="0.5" fill="#4878e0" opacity="0.55"/>
+  <rect x="19" y="22" width="4" height="2" rx="0.5" fill="#4878e0" opacity="0.55"/>
+  <rect x="34" y="22" width="4" height="2" rx="0.5" fill="#4878e0" opacity="0.55"/>
+  <rect x="4" y="33" width="4" height="2" rx="0.5" fill="#4878e0" opacity="0.4"/>
+  <rect x="19" y="33" width="4" height="2" rx="0.5" fill="#4878e0" opacity="0.4"/>
+  <rect x="34" y="33" width="4" height="2" rx="0.5" fill="#4878e0" opacity="0.4"/>
+
+  <!-- Right solar panel -->
+  <rect x="79" y="21" width="46" height="22" rx="2" fill="#0a1b38"/>
+  <rect x="79" y="21" width="46" height="22" rx="2" fill="none" stroke="#1e3d7a" stroke-width="0.9"/>
+  <!-- Right panel cell grid -->
+  <line x1="94" y1="21" x2="94" y2="43" stroke="#1e3d7a" stroke-width="0.7"/>
+  <line x1="109" y1="21" x2="109" y2="43" stroke="#1e3d7a" stroke-width="0.7"/>
+  <line x1="79" y1="32" x2="125" y2="32" stroke="#1e3d7a" stroke-width="0.7"/>
+  <!-- Right panel cell fills -->
+  <rect x="80" y="22" width="13" height="9" rx="0.5" fill="#0d2248" opacity="0.7"/>
+  <rect x="95" y="22" width="13" height="9" rx="0.5" fill="#0d2248" opacity="0.7"/>
+  <rect x="110" y="22" width="14" height="9" rx="0.5" fill="#0d2248" opacity="0.7"/>
+  <rect x="80" y="33" width="13" height="9" rx="0.5" fill="#0d2248" opacity="0.7"/>
+  <rect x="95" y="33" width="13" height="9" rx="0.5" fill="#0d2248" opacity="0.7"/>
+  <rect x="110" y="33" width="14" height="9" rx="0.5" fill="#0d2248" opacity="0.7"/>
+  <!-- Right panel cell specular glints -->
+  <rect x="80" y="22" width="4" height="2" rx="0.5" fill="#4878e0" opacity="0.55"/>
+  <rect x="95" y="22" width="4" height="2" rx="0.5" fill="#4878e0" opacity="0.55"/>
+  <rect x="110" y="22" width="4" height="2" rx="0.5" fill="#4878e0" opacity="0.55"/>
+  <rect x="80" y="33" width="4" height="2" rx="0.5" fill="#4878e0" opacity="0.4"/>
+  <rect x="95" y="33" width="4" height="2" rx="0.5" fill="#4878e0" opacity="0.4"/>
+  <rect x="110" y="33" width="4" height="2" rx="0.5" fill="#4878e0" opacity="0.4"/>
+
+  <!-- Panel-to-body struts -->
+  <rect x="49" y="27" width="8" height="10" rx="1" fill="#6070a0"/>
+  <rect x="49" y="27" width="8" height="10" rx="1" fill="none" stroke="#4055808" stroke-width="0.5"/>
+  <rect x="71" y="27" width="8" height="10" rx="1" fill="#6070a0"/>
+  <rect x="71" y="27" width="8" height="10" rx="1" fill="none" stroke="#405580" stroke-width="0.5"/>
+
+  <!-- Main satellite bus body -->
+  <rect x="57" y="15" width="14" height="34" rx="3" fill="#bfc8da"/>
+  <rect x="57" y="15" width="14" height="34" rx="3" fill="none" stroke="#8090ab" stroke-width="0.9"/>
+  <!-- Body thermal control stripes -->
+  <rect x="57" y="19" width="14" height="4" fill="#8898ae" opacity="0.6"/>
+  <rect x="57" y="27" width="14" height="4" fill="#8898ae" opacity="0.6"/>
+  <rect x="57" y="35" width="14" height="4" fill="#8898ae" opacity="0.6"/>
+  <!-- Body centre panel (mission equipment) -->
+  <rect x="59" y="23" width="10" height="12" rx="1" fill="#a8b5cb"/>
+  <rect x="59" y="23" width="10" height="12" rx="1" fill="none" stroke="#7888a0" stroke-width="0.6"/>
+  <!-- Equipment detail dots -->
+  <circle cx="62" cy="26" r="1" fill="#6a7a95"/>
+  <circle cx="66" cy="26" r="1" fill="#6a7a95"/>
+  <circle cx="62" cy="31" r="1" fill="#6a7a95"/>
+  <circle cx="66" cy="31" r="1" fill="#6a7a95"/>
+
+  <!-- Phased-array antenna plate (top of body, facing Earth) -->
+  <rect x="58" y="10" width="12" height="6" rx="1.5" fill="#d2daea"/>
+  <rect x="58" y="10" width="12" height="6" rx="1.5" fill="none" stroke="#8898b0" stroke-width="0.7"/>
+  <!-- Antenna element grid -->
+  <line x1="62" y1="10" x2="62" y2="16" stroke="#8898b0" stroke-width="0.45"/>
+  <line x1="66" y1="10" x2="66" y2="16" stroke="#8898b0" stroke-width="0.45"/>
+  <line x1="58" y1="13" x2="70" y2="13" stroke="#8898b0" stroke-width="0.45"/>
+  <!-- Antenna surface highlight -->
+  <rect x="59" y="11" width="5" height="2" rx="0.5" fill="#ffffff" opacity="0.2"/>
+
+  <!-- Ion thruster plume (bottom) -->
+  <ellipse cx="64" cy="52" rx="4" ry="2" fill="#50a0ff" opacity="0.7"/>
+  <ellipse cx="64" cy="53" rx="6" ry="3.5" fill="#2060d0" opacity="0.3"/>
+  <ellipse cx="64" cy="54" rx="8" ry="5" fill="#1040a8" opacity="0.12"/>
+</svg>

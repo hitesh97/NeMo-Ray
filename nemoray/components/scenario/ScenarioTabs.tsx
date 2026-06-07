@@ -12,6 +12,7 @@ import type { ComponentType } from "react";
 import { useState } from "react";
 
 import { Button, Dialog, Tooltip } from "@/components/primitives";
+import { TechStrip } from "@/components/scenario/TechStrip";
 import { cn } from "@/lib/cn";
 import { SCENARIOS, SCENARIO_ORDER } from "@/lib/scenarios";
 import type { ScenarioId } from "@/lib/types";
@@ -86,7 +87,7 @@ export function ScenarioTabs({ className }: { className?: string }) {
         <ScenarioSegment key={id} id={id} />
       ))}
 
-      <div className="ml-auto" />
+      <TechStrip className="ml-4 mr-auto min-w-0" />
 
       {/* Export Report */}
       <Dialog

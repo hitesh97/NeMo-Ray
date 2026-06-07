@@ -40,6 +40,7 @@ import {
   PolygonLayer,
   ScatterplotLayer,
   IconLayer,
+  LineLayer,
   TextLayer,
   BitmapLayer,
 } from "@deck.gl/layers";
@@ -1214,6 +1215,314 @@ function staticSig(l: LayerVis): string {
   return `${groups}|svc:${l.services.visible ? 1 : 0}`;
 }
 
+// ---- Starlink constellation -------------------------------------------------
+// Live satellite positions come from `/api/starlink` (SGP4 over the bundled TLE set),
+// refreshed every 15 s; between refreshes the animate loop extrapolates each satellite
+// forward from its last snapshot + averaged velocity so the constellation drifts
+// continuously instead of jumping. Satellites only render at globe zoom (they fade out by
+// zoom 7), reachable via the CameraViewPanel "satellite" button (camera "flyToGlobe").
+
+// London centroid used for nearest-satellite calculations.
+const LONDON_LAT = 51.5074;
+const LONDON_LON = -0.1278;
+
+// Position type matching the /api/starlink response.
+interface SatellitePosition {
+  name: string;
+  norad_id: number;
+  lon: number;
+  lat: number;
+  altitude_km: number;
+}
+
+// Returns the satellite whose 3D slant range to London is smallest.
+function nearestSatToLondon(sats: SatellitePosition[]): SatellitePosition | null {
+  if (!sats.length) return null;
+  let nearest = sats[0];
+  let bestDist = Infinity;
+  for (const s of sats) {
+    const midLat = (((s.lat + LONDON_LAT) / 2) * Math.PI) / 180;
+    const dx = ((s.lon - LONDON_LON) * 111320 * Math.cos(midLat)) / 1000; // km
+    const dy = ((s.lat - LONDON_LAT) * 110540) / 1000; // km
+    const dist = Math.sqrt(dx * dx + dy * dy + s.altitude_km * s.altitude_km);
+    if (dist < bestDist) {
+      bestDist = dist;
+      nearest = s;
+    }
+  }
+  return nearest;
+}
+
+// Estimates round-trip latency (ms) as 2 × slant-range / speed-of-light + 15 ms overhead.
+function estimateLatencyMs(sat: SatellitePosition): number {
+  const midLat = (((sat.lat + LONDON_LAT) / 2) * Math.PI) / 180;
+  const dx = ((sat.lon - LONDON_LON) * 111320 * Math.cos(midLat)) / 1000;
+  const dy = ((sat.lat - LONDON_LAT) * 110540) / 1000;
+  const slantRange = Math.sqrt(dx * dx + dy * dy + sat.altitude_km * sat.altitude_km);
+  // 300 km/ms ≈ speed of light; +15 ms accounts for routing & processing overhead.
+  return Math.round((2 * slantRange) / 300 + 15);
+}
+
+const SAT_ICON_DESCRIPTOR = {
+  url: "/icons/satellite.svg",
+  width: 128,
+  height: 64,
+  anchorX: 64,
+  anchorY: 32,
+  mask: false,
+};
+
+// Each API refresh stores a position snapshot per satellite; the last-known velocity
+// (averaged across up to 3 consecutive snapshots) extrapolates positions forward between
+// refreshes. On first sight (no consecutive snapshots yet) a satellite is seeded with a
+// physics-derived velocity so it moves immediately; the second snapshot overwrites it.
+interface SatSnapshot {
+  lon: number;
+  lat: number;
+  alt: number; // km
+  t: number; // Date.now() when fetched
+}
+interface SatTrack {
+  history: SatSnapshot[]; // oldest-first, max 3 entries
+  velLon: number; // average velocity in °/ms
+  velLat: number;
+  velAlt: number; // km/ms
+}
+
+// Earth's gravitational parameter (km³/s²) and Starlink shell-1 inclination.
+const GM_EARTH = 398600;
+const STARLINK_INC_RAD = 53 * (Math.PI / 180);
+
+// Two-body estimate of (velLon, velLat) in °/ms for a satellite at (lat, alt_km), from the
+// spherical-orbit ground-track equations (+ ascending / − descending node).
+function approximateOrbitalVelocity(
+  lat: number,
+  alt_km: number,
+  ascending: boolean,
+): [number, number] {
+  const r = 6371 + alt_km;
+  const omegaDegMs = (Math.sqrt(GM_EARTH / (r * r * r)) * (180 / Math.PI)) / 1000;
+  const sinLat = Math.sin(lat * (Math.PI / 180));
+  const cosLat = Math.cos(lat * (Math.PI / 180));
+  const sinInc = Math.sin(STARLINK_INC_RAD);
+  const cosInc = Math.cos(STARLINK_INC_RAD);
+  const velLon = (omegaDegMs * cosInc) / Math.max(cosLat, 0.1);
+  const velLat =
+    (ascending ? 1 : -1) * omegaDegMs * Math.sqrt(Math.max(0, sinInc * sinInc - sinLat * sinLat));
+  return [velLon, velLat];
+}
+
+// Merge a fresh batch of positions into the per-satellite tracks, updating averaged velocity.
+function updateSatTracks(
+  tracks: Map<string, SatTrack>,
+  newSats: SatellitePosition[],
+  now: number,
+): void {
+  for (const sat of newSats) {
+    const snap: SatSnapshot = { lon: sat.lon, lat: sat.lat, alt: sat.altitude_km, t: now };
+    const prev = tracks.get(sat.name);
+    if (!prev) {
+      const [velLon, velLat] = approximateOrbitalVelocity(
+        sat.lat,
+        sat.altitude_km,
+        // Seed node direction deterministically from the name so it doesn't reshuffle.
+        (sat.name.charCodeAt(0) & 1) === 0,
+      );
+      tracks.set(sat.name, { history: [snap], velLon, velLat, velAlt: 0 });
+      continue;
+    }
+    const history = [...prev.history, snap].slice(-3);
+    let vLon = 0,
+      vLat = 0,
+      vAlt = 0,
+      n = 0;
+    for (let i = 1; i < history.length; i++) {
+      const dt = history[i].t - history[i - 1].t;
+      if (dt > 500) {
+        vLon += (history[i].lon - history[i - 1].lon) / dt;
+        vLat += (history[i].lat - history[i - 1].lat) / dt;
+        vAlt += (history[i].alt - history[i - 1].alt) / dt;
+        n++;
+      }
+    }
+    tracks.set(sat.name, {
+      history,
+      velLon: n > 0 ? vLon / n : prev.velLon,
+      velLat: n > 0 ? vLat / n : prev.velLat,
+      velAlt: n > 0 ? vAlt / n : prev.velAlt,
+    });
+  }
+}
+
+// Extrapolate every satellite forward from its last snapshot using averaged velocity.
+function interpolatedPositions(tracks: Map<string, SatTrack>, now: number): SatellitePosition[] {
+  const result: SatellitePosition[] = [];
+  for (const [name, track] of tracks) {
+    const last = track.history[track.history.length - 1];
+    const dt = now - last.t;
+    let lon = last.lon + track.velLon * dt;
+    const lat = Math.max(-90, Math.min(90, last.lat + track.velLat * dt));
+    const altitude_km = Math.max(0, last.alt + track.velAlt * dt);
+    lon = ((((lon + 180) % 360) + 360) % 360) - 180;
+    result.push({ name, norad_id: 0, lon, lat, altitude_km });
+  }
+  return result;
+}
+
+// Inter-satellite link segments for the constellation grid overlay. Samples up to
+// MAX_SAT_SAMPLE evenly to keep the O(n²) neighbour search fast, then connects each
+// sampled satellite to its 2 nearest neighbours.
+interface SatLink {
+  from: Position;
+  to: Position;
+}
+const MAX_SAT_SAMPLE = 250;
+
+function buildSatelliteLinks(sats: SatellitePosition[]): SatLink[] {
+  const step = Math.max(1, Math.floor(sats.length / MAX_SAT_SAMPLE));
+  const sample: SatellitePosition[] = [];
+  for (let i = 0; i < sats.length && sample.length < MAX_SAT_SAMPLE; i += step) sample.push(sats[i]);
+
+  const links: SatLink[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < sample.length; i++) {
+    const a = sample[i];
+    const dists: { j: number; d: number }[] = [];
+    for (let j = 0; j < sample.length; j++) {
+      if (i === j) continue;
+      const b = sample[j];
+      let dLon = b.lon - a.lon;
+      if (dLon > 180) dLon -= 360;
+      else if (dLon < -180) dLon += 360;
+      const dLat = b.lat - a.lat;
+      dists.push({ j, d: dLon * dLon + dLat * dLat });
+    }
+    dists.sort((x, y) => x.d - y.d);
+    for (const { j } of dists.slice(0, 2)) {
+      const key = i < j ? `${i}-${j}` : `${j}-${i}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      links.push({
+        from: [a.lon, a.lat, a.altitude_km * 1000] as Position,
+        to: [sample[j].lon, sample[j].lat, sample[j].altitude_km * 1000] as Position,
+      });
+    }
+  }
+  return links;
+}
+
+// Satellite layers: inter-sat links + SVG billboard icon + sub-pixel dot + an oversized
+// invisible hit target + the nearest-to-London label (name + estimated latency). `opacity`
+// (supplied per-frame, 1 at globe zoom → 0 at London zoom) fades the whole set out on zoom-in.
+function buildSatelliteLayers(
+  sats: SatellitePosition[],
+  opacity: number,
+  zoom: number,
+  onClickSat: (sat: SatellitePosition) => void,
+): Layer[] {
+  if (!sats.length || opacity <= 0) return [];
+  // 14 px at UK zoom (≥5), shrinks to ~6 px at globe zoom (1.5). Clamped [5, 14].
+  const iconSize = Math.round(Math.max(5, Math.min(14, 4 + zoom * 2)));
+  interface SatDatum {
+    pos: Position;
+    name: string;
+    sat: SatellitePosition;
+  }
+  const data: SatDatum[] = sats.map((s) => ({
+    pos: [s.lon, s.lat, s.altitude_km * 1000] as Position,
+    name: s.name,
+    sat: s,
+  }));
+  const links = buildSatelliteLinks(sats);
+  const nearest = nearestSatToLondon(sats);
+  const nearestDatum: SatDatum[] = nearest
+    ? [
+        {
+          pos: [nearest.lon, nearest.lat, nearest.altitude_km * 1000] as Position,
+          name: nearest.name,
+          sat: nearest,
+        },
+      ]
+    : [];
+  const latencyMs = nearest ? estimateLatencyMs(nearest) : 0;
+  return [
+    new LineLayer<SatLink>({
+      id: "sat-links",
+      data: links,
+      getSourcePosition: (d) => d.from,
+      getTargetPosition: (d) => d.to,
+      getColor: [80, 160, 255, Math.round(opacity * 45)] as Color,
+      getWidth: 1,
+      widthUnits: "pixels",
+      widthMinPixels: 0.5,
+      widthMaxPixels: 1.2,
+    }),
+    new IconLayer<SatDatum>({
+      id: "sat-icons",
+      data,
+      billboard: true,
+      getIcon: () => SAT_ICON_DESCRIPTOR,
+      getPosition: (d) => d.pos,
+      getSize: iconSize,
+      sizeUnits: "pixels",
+      sizeMinPixels: 4,
+      sizeMaxPixels: iconSize,
+      opacity,
+      pickable: false,
+    }),
+    // Invisible oversized hit target — a 24 px click zone regardless of icon size.
+    new ScatterplotLayer<SatDatum>({
+      id: "sat-hit",
+      data,
+      billboard: true,
+      radiusUnits: "pixels",
+      getPosition: (d) => d.pos,
+      getRadius: 24,
+      radiusMinPixels: 24,
+      radiusMaxPixels: 24,
+      getFillColor: [0, 0, 0, 0] as Color,
+      stroked: false,
+      pickable: true,
+      onClick: (info) => {
+        if (info.object) onClickSat(info.object.sat);
+      },
+    }),
+    new ScatterplotLayer<SatDatum>({
+      id: "sat-dot",
+      data,
+      billboard: true,
+      radiusUnits: "pixels",
+      getPosition: (d) => d.pos,
+      getRadius: 1.5,
+      radiusMinPixels: 1,
+      radiusMaxPixels: 2.5,
+      getFillColor: [180, 210, 255, Math.round(opacity * 180)] as Color,
+      stroked: false,
+    }),
+    new TextLayer<SatDatum>({
+      id: "sat-nearest-label",
+      data: nearestDatum,
+      getPosition: (d) => d.pos,
+      getText: (d) => `${d.name}\n~${latencyMs} ms`,
+      getSize: 11,
+      sizeUnits: "pixels",
+      getColor: [200, 230, 255, Math.round(opacity * 255)] as Color,
+      billboard: true,
+      getPixelOffset: [0, -(iconSize / 2 + 14)],
+      getTextAnchor: "middle",
+      getAlignmentBaseline: "bottom",
+      fontFamily: "system-ui, sans-serif",
+      fontWeight: 600,
+      characterSet: "auto",
+      background: true,
+      getBackgroundColor: [8, 14, 26, Math.round(opacity * 210)] as Color,
+      backgroundPadding: [5, 3, 5, 3],
+      lineHeight: 1.35,
+      parameters: { depthCompare: "always" as const },
+    }),
+  ];
+}
+
 export function DeckScene({
   layers,
   directives = EMPTY_DIRECTIVES,
@@ -1242,6 +1551,15 @@ export function DeckScene({
   // The live MapLibre map, exposed so the camera/focus effects can drive it (the build
   // effect below is the only writer).
   const mapRef = useRef<maplibregl.Map | null>(null);
+
+  // London coverage centroid (set once the bounds load) so the "flyToLondon" camera
+  // command can return to the coverage view from the globe.
+  const cLngRef = useRef(LONDON_LON);
+  const cLatRef = useRef(LONDON_LAT);
+
+  // Per-satellite position tracks, merged from each /api/starlink refresh; the animate
+  // loop extrapolates them forward every frame (see interpolatedPositions).
+  const satTracksRef = useRef<Map<string, SatTrack>>(new Map());
 
   // Place labels, sourced from the canonical gazetteer on mount (see toLabelLandmarks); the
   // hardcoded LANDMARKS array is the fallback. declutterLabels reads this ref.
@@ -1293,6 +1611,28 @@ export function DeckScene({
       case "tilt3d":
         map.easeTo({ pitch: 55, duration: 600 });
         break;
+      // Starlink view toggle: dive into the London coverage twin, or pull out to the
+      // globe where the live constellation renders (satellites fade in past zoom ~7).
+      case "flyToLondon":
+        map.flyTo({
+          center: [cLngRef.current, cLatRef.current],
+          zoom: 12.6,
+          pitch: 50,
+          bearing: 0,
+          duration: 2800,
+          essential: true,
+        });
+        break;
+      case "flyToGlobe":
+        map.flyTo({
+          center: [0, 25],
+          zoom: 1.5,
+          pitch: 0,
+          bearing: 0,
+          duration: 3000,
+          essential: true,
+        });
+        break;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraCommand?.nonce]);
@@ -1305,12 +1645,16 @@ export function DeckScene({
     let overlay: MapboxOverlay | null = null;
     let raf = 0;
     let cancelled = false;
+    let satInterval = 0;
 
     (async () => {
       const bounds = (await fetchJSON(`${DATA}/coverage_bounds.json`)) as Bounds;
       if (cancelled) return;
       const cLng = (bounds.west + bounds.east) / 2;
       const cLat = (bounds.south + bounds.north) / 2;
+      // Expose the coverage centroid to the camera bus so "flyToLondon" returns here.
+      cLngRef.current = cLng;
+      cLatRef.current = cLat;
 
       map = new maplibregl.Map({
         container,
@@ -1396,6 +1740,31 @@ export function DeckScene({
         return `${map!.getZoom().toFixed(2)}|${c.lng.toFixed(4)}|${c.lat.toFixed(4)}|${map!.getBearing().toFixed(1)}|${map!.getPitch().toFixed(1)}`;
       };
 
+      // Starlink: fetch live positions now, then refresh every 15 s. Each batch merges into
+      // satTracksRef so the animate loop can extrapolate smoothly between refreshes.
+      const refreshSats = () =>
+        fetch("/api/starlink")
+          .then((r) => r.json())
+          .then((j: { satellites: SatellitePosition[] }) => {
+            if (!cancelled) updateSatTracks(satTracksRef.current, j.satellites, Date.now());
+          })
+          .catch(() => {});
+      void refreshSats();
+      satInterval = window.setInterval(refreshSats, 15_000);
+
+      // Click a satellite → fly the camera to its current ground-track position (kept at a
+      // zoom where satellites stay visible, so the clicked one doesn't vanish on arrival).
+      const onClickSat = (sat: SatellitePosition) => {
+        map?.flyTo({
+          center: [sat.lon, sat.lat],
+          zoom: 5,
+          pitch: 15,
+          bearing: 0,
+          duration: 2200,
+          essential: true,
+        });
+      };
+
       let time = 0;
       const animate = () => {
         if (cancelled || !overlay) return;
@@ -1414,6 +1783,9 @@ export function DeckScene({
           shownLabels = declutterLabels(map!, landmarksRef.current);
           lastLabelView = vk;
         }
+        // Starlink constellation: only at globe zoom (≤4 full, fading out by zoom 7).
+        const satOpacity = Math.max(0, Math.min(1, (7 - zoom) / 3));
+        const sats = satOpacity > 0 ? interpolatedPositions(satTracksRef.current, Date.now()) : [];
         overlay.setProps({
           layers: [
             ...staticLayers,
@@ -1427,6 +1799,8 @@ export function DeckScene({
             ...buildDirectiveLayers(directivesRef.current, time),
             // Place labels last so they sit on top; deconflicted CPU-side per viewport.
             ...buildLabelLayers(shownLabels, L.labels),
+            // Starlink satellites on top of everything (globe view only).
+            ...buildSatelliteLayers(sats, satOpacity, zoom, onClickSat),
           ],
         });
         raf = requestAnimationFrame(animate);
@@ -1437,6 +1811,7 @@ export function DeckScene({
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
+      clearInterval(satInterval);
       if (overlay) overlay.finalize();
       if (map) map.remove();
       mapRef.current = null;

@@ -360,7 +360,16 @@ export interface MapSurfaceProps {
 
 // ── camera command bus ──────────────────────────────────────────────────────
 /** Camera intents a surface can honour. Dispatched via the store's nonce bus. */
-export type CameraCommandType = "zoomIn" | "zoomOut" | "reset" | "tilt2d" | "tilt3d";
+export type CameraCommandType =
+  | "zoomIn"
+  | "zoomOut"
+  | "reset"
+  | "tilt2d"
+  | "tilt3d"
+  // Starlink: fly down into the London coverage view (antenna) or out to the globe
+  // where the live satellite constellation is visible (satellite).
+  | "flyToLondon"
+  | "flyToGlobe";
 
 /** A one-shot camera intent. `nonce` makes repeats of the same type distinct. */
 export interface CameraCommand {
