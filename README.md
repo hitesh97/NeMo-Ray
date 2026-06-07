@@ -16,7 +16,7 @@ radio signals propagate through the built environment. A Nemotron-powered agent 
 failure events in real time: it identifies exactly which area has gone dark, calculates the
 optimal placement of satellite-equipped Cell-on-Wheels (COWs) fitted with Starlink terminals to
 cover the gap, and determines which Starlink satellites are overhead — failing coverage over to
-satellite and keeping emergency services connected when the ground network cannot.
+satellite and keeping emergency services connected when the ground network cannot
 
 ---
 
