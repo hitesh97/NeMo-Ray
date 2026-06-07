@@ -88,7 +88,7 @@ def solve_tile(cfg: dict, tile: Tile, xml_path: str, sites: list[Site]) -> dict 
 
 
 def trace_mast_rays(cfg: dict, tile: Tile, xml_path: str, masts: list[Site],
-                    ring: int = 9, ring_radius: float = 350.0,
+                    ring: int = 9, ring_radius: float = 100.0,
                     max_lines: int = 10 ** 9) -> list[dict]:
     """Trace ALL ray paths out of every given mast (LOS + every reflection/diffraction
     found to a ring of receivers around each mast), for 3D visualisation. The scene is

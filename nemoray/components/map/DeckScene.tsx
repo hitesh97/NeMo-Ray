@@ -40,6 +40,7 @@ import {
   ScatterplotLayer,
   IconLayer,
   TextLayer,
+  BitmapLayer,
 } from "@deck.gl/layers";
 import { TripsLayer } from "@deck.gl/geo-layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
@@ -53,6 +54,7 @@ import type { LayerId, LayerState } from "@/lib/types";
 //   masts     → "masts-lattice", "masts-dot"          (existing EE)
 //   proposed  → "newmasts-lattice", "newmasts-dot"    (cuOpt-proposed)
 //   deadzone  → "holes"
+//   coverage  → "coverage"  (the dBm best-server heatmap raster, coverage.png; default off)
 //   services  → "service-icons", "service-labels", + the service-colour fill on matched
 //               footprints inside the "buildings" layer (recoloured when services flips)
 //   labels    → "labels", "label-dots", + "service-labels" (station names are text labels,
@@ -277,6 +279,7 @@ interface SceneData {
   newMasts: Mast[];
   markers: Marker[];
   holes: Hole[];
+  bounds: Bounds | null;
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -657,6 +660,20 @@ function buildMastDots(
 function buildStaticLayers(data: SceneData, vis: LayerVis): LayersList {
   const L: LayersList = [];
 
+  // Coverage heatmap (dBm best-server raster, coverage.png) draped at ground level so the
+  // extruded buildings + ray field sit above it. Default off (see DEFAULT_LAYERS.coverage).
+  if (data.bounds)
+    L.push(
+      new BitmapLayer({
+        id: "coverage",
+        image: `${DATA}/coverage.png`,
+        bounds: [data.bounds.west, data.bounds.south, data.bounds.east, data.bounds.north],
+        visible: vis.coverage.visible,
+        opacity: vis.coverage.opacity,
+        pickable: false,
+      }),
+    );
+
   if (data.buildings)
     L.push(
       new GeoJsonLayer<BuildingProps>({
@@ -911,9 +928,27 @@ function buildLabelLayers(
   ];
 }
 
+// Ray thickness (px) tapers with the live zoom so the trails read as crisp threads when
+// zoomed right out (where a fixed pixel width looked chunky against the shrunken scene) and
+// fill out to full weight up close. Eased between MIN and FULL zoom like markerScale().
+const RAY_MIN_ZOOM = 10; // at/below: rays at their thinnest
+const RAY_FULL_ZOOM = 14; // at/above: rays at full width
+const RAY_WIDTH_MIN = 0.5; // px width when zoomed right out
+const RAY_WIDTH_FULL = 2.4; // px width up close
+function rayWidth(zoom: number): number {
+  const t = clamp01((zoom - RAY_MIN_ZOOM) / (RAY_FULL_ZOOM - RAY_MIN_ZOOM));
+  return RAY_WIDTH_MIN + (RAY_WIDTH_FULL - RAY_WIDTH_MIN) * t;
+}
+
 // The single animated layer — the signal-ray trips, advanced each frame by `time`,
-// coloured by per-mast load rank (see toTrips).
-function buildRaysLayer(trips: Trip[], time: number, st: LayerState): TripsLayer<Trip> {
+// coloured by per-mast load rank (see toTrips). Width tapers with `zoom` (rayWidth).
+function buildRaysLayer(
+  trips: Trip[],
+  time: number,
+  zoom: number,
+  st: LayerState,
+): TripsLayer<Trip> {
+  const w = rayWidth(zoom);
   return new TripsLayer<Trip>({
     id: "rays",
     data: trips,
@@ -923,8 +958,9 @@ function buildRaysLayer(trips: Trip[], time: number, st: LayerState): TripsLayer
     getColor: (d) => d.color,
     opacity: 0.8 * st.opacity,
     widthUnits: "pixels",
-    getWidth: 2.4,
-    widthMinPixels: 2,
+    getWidth: w,
+    widthMinPixels: 1,
+    updateTriggers: { getWidth: w },
     capRounded: true,
     jointRounded: true,
     trailLength: TRAIL_LENGTH,
@@ -940,7 +976,7 @@ function buildRaysLayer(trips: Trip[], time: number, st: LayerState): TripsLayer
 // (on/off only — not its opacity) because it recolours matched footprints in the static
 // buildings layer; the service pins/names and place labels are per-frame layers.
 function staticSig(l: LayerVis): string {
-  const groups = (["buildings", "masts", "proposed", "deadzone"] as const)
+  const groups = (["buildings", "masts", "proposed", "deadzone", "coverage"] as const)
     .map((k) => `${l[k].visible ? 1 : 0}:${l[k].opacity}`)
     .join("|");
   return `${groups}|svc:${l.services.visible ? 1 : 0}`;
@@ -1031,6 +1067,7 @@ export function DeckScene({ layers }: { layers: LayerVis }) {
         // Tags matched footprints in `buildings` in place, so build this before the layers.
         markers: matchServiceBuildings(buildings, emergency, bounds),
         holes: toHoles(holesFC),
+        bounds,
       };
 
       // Static layers are rebuilt only when a layer toggle/opacity changes (tracked by
@@ -1070,7 +1107,7 @@ export function DeckScene({ layers }: { layers: LayerVis }) {
         overlay.setProps({
           layers: [
             ...staticLayers,
-            buildRaysLayer(data.trips, time, L.rays),
+            buildRaysLayer(data.trips, time, zoom, L.rays),
             buildMastDots("masts", data.masts, MAST_DOT_EE, scale, L.masts),
             buildMastDots("newmasts", data.newMasts, MAST_DOT_NEW, scale, L.proposed),
             buildServiceIcons(data.markers, scale, L.services),

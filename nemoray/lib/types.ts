@@ -196,6 +196,7 @@ export type LayerId =
   | "masts"
   | "proposed"
   | "deadzone"
+  | "coverage"
   | "services"
   | "labels";
 

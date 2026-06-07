@@ -17,6 +17,7 @@ export const LAYER_META: LayerMeta[] = [
   { id: "masts", label: "Cell Masts (EE)", hint: "Existing EE antenna sites" },
   { id: "proposed", label: "Proposed Masts", hint: "cuOpt-proposed sites" },
   { id: "deadzone", label: "Dead Zones", hint: "Coverage holes" },
+  { id: "coverage", label: "Coverage Heatmap", hint: "Best-server signal (dBm) raster" },
   { id: "services", label: "Emergency Services", hint: "Police / fire / hospital pins" },
   { id: "labels", label: "Labels", hint: "Place & landmark labels" },
 ];
@@ -27,6 +28,8 @@ export const DEFAULT_LAYERS: Record<LayerId, LayerState> = {
   masts: { visible: true, opacity: 1 },
   proposed: { visible: true, opacity: 1 },
   deadzone: { visible: true, opacity: 1 },
+  // Off by default — flip it on from the Map Layers panel.
+  coverage: { visible: false, opacity: 0.7 },
   services: { visible: true, opacity: 1 },
   labels: { visible: true, opacity: 1 },
 };

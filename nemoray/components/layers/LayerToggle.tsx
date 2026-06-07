@@ -7,6 +7,7 @@ import {
   RadioTower,
   Siren,
   Tag,
+  Thermometer,
   TowerControl,
   Waves,
 } from "lucide-react";
@@ -22,6 +23,7 @@ const ICON: Record<LayerId, LucideIcon> = {
   masts: RadioTower,
   proposed: TowerControl,
   deadzone: CircleSlash,
+  coverage: Thermometer,
   services: Siren,
   labels: Tag,
 };
