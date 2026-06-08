@@ -19,12 +19,12 @@ deleting core methodology by accident.
   and confirm before editing. These are protected, **not frozen** — they have an escape
   hatch, but the escape hatch is "be deliberate," not "silently refactor."
 - **CONVENTION** — The house style. Follow it for consistency; deviate only with a reason.
-- **FREE TO IMPROVE** — Everything else. `../../CONTRIBUTING.md` applies: a named tool is a
-  starting point — swap in something better.
+- **FREE TO IMPROVE** — Everything else. A named tool is a starting point — swap in
+  something better.
 
-`CONTRIBUTING.md`'s "docs are a direction, not a contract" stance governs **product and
-tooling** choices. **This file governs the narrow set of code-level locks** — don't cite
-CONTRIBUTING.md to justify flipping one of these.
+Docs are a direction, not a contract — that stance governs **product and tooling** choices.
+**This file governs the narrow set of code-level locks** — don't cite a doc to justify
+flipping one of these.
 
 ---
 
