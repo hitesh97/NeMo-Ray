@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nemotron agent SSE bridge (agent/) on :8001 — the viewer/HUD POST /agent here.
+# Nemotron agent SSE bridge (agent/) on :8001 — the HUD POSTs /agent here.
 # It drives the twin over TWIN_URL (:8000) and reasons with Nemotron over
 # NEMOTRON_BASE_URL (:8080). Needs serve-twin.sh and serve-nemotron.sh running.
 #

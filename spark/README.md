@@ -1,7 +1,7 @@
 # Running NeMo-Ray locally on an NVIDIA DGX Spark (GB10)
 
-The **primary, graded** way to run NeMo-Ray: the whole stack on **one local DGX Spark**, all
-on-device. (`brev/` is the cloud-H200 mirror for when you don't have the Spark to hand.)
+Run the whole NeMo-Ray stack on **one local DGX Spark**, all on-device. (`brev/` is the
+cloud-H200 mirror for when you don't have the Spark to hand.)
 
 1. **Sionna RT coverage pipeline** (`src/`) — generates `nemoray/public/raytracing/*`.
 2. **Nemotron agent stack:**
@@ -10,10 +10,9 @@ on-device. (`brev/` is the cloud-H200 mirror for when you don't have the Spark t
    - **agent** — `agent/` SSE bridge on **:8001** (`AGENT_PORT`)
    - **HUD** — Next.js on **:3000**
 
-> **The Spark story (judged):** the GB10's **128 GB unified memory** holds the Sionna
+> **Why the Spark:** the GB10's **128 GB unified memory** holds the Sionna
 > radio-map buffers **and** the Nemotron context in one shared pool — no host↔device copies —
 > while **all inference stays local** (privacy + latency for an emergency-services operator).
-> See `docs/JUDGING.md`.
 
 ## The box
 
@@ -59,9 +58,8 @@ curl -s localhost:8080/v1/models   # NIM is ready once it lists the model (first
 bash spark/down.sh             # stop everything
 ```
 
-It's all local — open the HUD at **<http://localhost:3000>** (or the twin's viewer at
-<http://localhost:8000/viewer/>). The HUD proxies its agent calls to `:8001`, which talks to
-the twin on `:8000` and Nemotron on `:8080`.
+It's all local — open the HUD at **<http://localhost:3000>**. The HUD proxies its agent calls
+to `:8001`, which talks to the twin on `:8000` and Nemotron on `:8080`.
 
 **Viewing from a laptop on the LAN** (services bind `0.0.0.0`):
 
@@ -95,4 +93,3 @@ MODEL_PROFILE=super bash spark/serve-nemotron.sh   # just the NIM, on the 120B
 | `serve-hud.sh` | Next.js HUD on :3000 |
 
 Config/secrets come from the **root `.env`** (`cp .env.example .env`). Never commit real keys.
-See the repo-root `CLAUDE.md` → Secrets. `spark/CLAUDE.md` is the canonical runbook.

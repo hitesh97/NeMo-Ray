@@ -12,7 +12,7 @@ const POLICE_PATH = path.join(DATA_DIR, 'police-stations-london.csv');
 const FIRE_PATH = path.join(DATA_DIR, 'fire-stations-london.csv');
 const HOSPITAL_PATH = path.join(DATA_DIR, 'hospitals-england.csv');
 
-// London bounding box (see nemoray/CLAUDE.md) — the hospital dataset covers all
+// London bounding box — the hospital dataset covers all
 // of England, so we clip it to London to match the other layers.
 const LONDON_BBOX = { minLng: -0.51, maxLng: 0.334, minLat: 51.286, maxLat: 51.686 };
 

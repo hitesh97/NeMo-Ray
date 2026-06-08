@@ -187,7 +187,7 @@ def run(args):
     print("\n=== Summary ===")
     for k, v in summary.items():
         print(f"  {k}: {v}")
-    print(f"\nArtifacts in {cfg['paths']['out_dir']}/  ->  serve viewer/ to view")
+    print(f"\nArtifacts in {cfg['paths']['out_dir']}/  ->  view them in the nemoray/ HUD")
 
 
 def main():

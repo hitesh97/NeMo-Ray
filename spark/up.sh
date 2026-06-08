@@ -56,7 +56,7 @@ cat <<EOF
 
     Endpoints (all local):
       NIM    http://localhost:8080/v1/models
-      twin   http://localhost:8000  (viewer at /viewer/)
+      twin   http://localhost:8000
       agent  http://localhost:${AGENT_PORT:-8001}
 $([ "$HUD" = 1 ] && echo "      HUD    http://localhost:3000")
 

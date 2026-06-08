@@ -38,7 +38,7 @@ satellite and keeping emergency services connected when the ground network canno
 
 ## Full Technology Stack
 
-### Python pipeline (`src/`, `agent/`, `modellingsim/`)
+### Python pipeline (`src/`, `agent/`)
 
 | Package | Version | Purpose |
 | --- | --- | --- |
@@ -172,14 +172,6 @@ NeMo-Ray/
 │   │   └── icons/              # Emergency-service map-pin SVGs
 │   └── docs/                   # INVARIANTS.md, DESIGN-SYSTEM.md
 │
-├── viewer/                     # Standalone deck.gl viewer (CDN; no build step)
-│   ├── index.html              # Entry point
-│   ├── app.js                  # TripsLayer rays + GeoJsonLayer buildings + controls
-│   └── config.js               # Viewer constants (colours, animation, endpoints)
-│
-├── modellingsim/               # cuOpt + Nemotron smoke tests
-│   └── src/nemoray_modelling/  # agent, nemotron, cuOpt, emergency, lidar clients
-│
 ├── data/                       # Input datasets
 │   ├── greater-london-latest.osm.pbf   # Geofabrik OSM extract (~120 MB)
 │   ├── buildings.pkl           # Cached building footprints (PyOsmium output)
@@ -194,13 +186,13 @@ NeMo-Ray/
 ├── scripts/
 │   └── serve_nemotron.sh       # Launch Nemotron NIM (vLLM NVFP4) on DGX Spark
 │
-├── spark/                      # DGX Spark (GB10) deployment scripts + CLAUDE.md
+├── spark/                      # DGX Spark (GB10) deployment scripts
 ├── brev/                       # Brev H200 cloud mirror
 ├── out/                        # Legacy pipeline output dir
 ├── SITEFINDER_MAY_2012.csv     # Ofcom Sitefinder base dataset (full UK)
 ├── config.yaml                 # Pipeline configuration (bbox, radio, tiling, cuOpt)
 ├── requirements.txt            # Python deps for src/ (pip/venv path)
-├── pyproject.toml              # uv workspace config (root + modellingsim member)
+├── pyproject.toml              # uv workspace config
 └── uv.lock                     # Locked dependency graph
 ```
 
@@ -221,10 +213,9 @@ data/greater-london.osm.pbf ─┴──► src/ (Python pipeline, GPU)
                                                           buildings / masts / hotspots
                                                           paths / new_masts / new_rays
                                                           optimization + verification JSON
-                                                                     │           │
-                                   ┌───────────────────────────────────┘           │
-                                   ▼                                               ▼
-              viewer/ (standalone deck.gl, CDN)            nemoray/ (Next.js 16 HUD — primary)
+                                                                                 │
+                                                                                 ▼
+                                                          nemoray/ (Next.js 16 HUD — primary)
                                                                deck.gl map, Nemotron agent chat,
                                                                cuOpt proposals, scenario timeline
 
@@ -334,7 +325,7 @@ OSM 3D buildings (Geofabrik) ─┘                                             
                                                                                    │
                                     low-coverage hotspots + reproject to WGS84    │
                                                                                    ▼
-                                      out/*.png + *.geojson  →  deck.gl 3D viewer
+                                      out/*.png + *.geojson  →  nemoray/ HUD (deck.gl)
 ```
 
 - **Physics**: EPSG:27700 (British National Grid) so tiles align seamlessly. Each tile is a
@@ -397,3 +388,9 @@ Environment variables (`.env.example`):
 | `LIDAR_DSM` / `LIDAR_DTM` | Paths to EA LiDAR rasters for real LoS checks |
 | `NEXT_PUBLIC_MAPTILER_KEY` | MapTiler base-map API key |
 | `ELEVENLABS_API_KEY` | ElevenLabs voice API key (STT + TTS) |
+
+---
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).

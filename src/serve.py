@@ -1,7 +1,7 @@
-"""Web server for the viewer + the twin's HTTP API.
+"""Web server for the digital twin's HTTP API.
 
-Serves the static files (viewer/, out/) like `python -m http.server`, and exposes the
-API the deck.gl viewer and the Nemotron agent drive:
+Serves the live artifacts under `/out/` like `python -m http.server`, and exposes the
+API the Nemotron agent (and the Next.js HUD) drive:
 
   POST /api/coverage  {disabled_site_ids:[...], added:[{id,lat,lng,height_m?}]}
                       → re-simulate affected tiles (Sionna RT), re-export coverage +
@@ -14,7 +14,7 @@ API the deck.gl viewer and the Nemotron agent drive:
 Heavy modules (Sionna RT via resimulate) are imported lazily so the static server
 starts instantly and only touches the GPU on the first simulation call.
 
-    python -m src.serve            # http://localhost:8000/viewer/
+    python -m src.serve            # http://localhost:8000/  (twin API + /out/ artifacts)
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def _change_label(disabled, added, result) -> str:
 
 
 # Absolute artifacts dir (config paths.out_dir, already root-resolved by load_config).
-# The agent + viewer fetch the live artifacts at the stable URL prefix /out/, but on this
+# The agent + HUD fetch the live artifacts at the stable URL prefix /out/, but on this
 # branch the pipeline publishes them to nemoray/public/raytracing (so a fresh run shows up
 # in the HUD), not ./out — so static /out/ requests are aliased onto out_dir below.
 _OUT_DIR = load_config()["paths"]["out_dir"]
@@ -146,7 +146,7 @@ class Handler(SimpleHTTPRequestHandler):
         return fc
 
     def _run_route(self):
-        """Driving route between two lng,lat points via the public OSRM demo, so the viewer
+        """Driving route between two lng,lat points via the public OSRM demo, so the HUD
         can draw the actual ROAD path a Cell-on-Wheels tows along. Falls back to a straight
         line if OSRM is unreachable. Query: ?from=lng,lat&to=lng,lat"""
         import urllib.parse
@@ -251,7 +251,7 @@ def main():
     threading.Thread(target=_warmup, daemon=True).start()
     httpd = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"Serving {ROOT}")
-    print(f"  viewer:    http://localhost:{port}/viewer/")
+    print(f"  artifacts: http://localhost:{port}/out/")
     print(f"  coverage:  POST http://localhost:{port}/api/coverage  (Sionna RT re-sim)")
     print(f"  optimise:  POST http://localhost:{port}/api/optimize  (cuOpt + verify)")
     print(f"  rays:      POST http://localhost:{port}/api/rays      (trace on demand)")

@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * DeckScene — the live 3D coverage twin, ported from the standalone deck.gl
- * viewer (`viewer/app.js`, "trips" theme by Mehul Chourasia) into the HUD.
+ * DeckScene — the live 3D coverage twin: a deck.gl "trips" scene of
+ * animated coverage-ray paths over the HUD map.
  *
  * Animated ray traces (TripsLayer) coloured by antenna load share (yellow = light,
  * red = stressed) over height-shaded extruded OSM buildings, EE masts + cuOpt-proposed

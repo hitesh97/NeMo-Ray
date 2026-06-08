@@ -79,7 +79,7 @@ subsets:
   # London Bridge/Southwark out to Canary Wharf and Greenwich (SE).
   westminster_canary: { center: [51.504, -0.067], tiles: 5 }
 
-# The tile used for ray-path visualisation in the viewer (center lat/lng)
+# The tile used for ray-path visualisation (center lat/lng)
 focus_tile: [51.5074, -0.1278]
 
 # Paths

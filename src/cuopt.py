@@ -7,8 +7,8 @@ tried in order so the optimiser keeps working when the cloud is unreachable or u
      authenticated with an `nvapi-` Bearer key. Small problems return 200 synchronously; larger
      ones queue (202) and are polled via the NVCF status endpoint.
   2. **Local self-hosted** — a cuOpt server on the same GPU box (`python -m
-     cuopt_server.cuopt_service`, see `brev/serve-cuopt.sh`), reached via the `cuopt-sh-client`
-     library (Arzaan's stack) or, failing that, its REST API directly. Used as a fallback when
+     cuopt_server.cuopt_service`), reached via the `cuopt-sh-client` library or, failing
+     that, its REST API directly. Used as a fallback when
      the hosted call fails OR no API key is set — so an offline / air-gapped / cloud-outage demo
      still optimises on the local H200.
 
@@ -85,11 +85,13 @@ def solve_milp(
         if hosted_exc is not None:
             raise RuntimeError(
                 f"cuOpt unavailable: hosted failed ({hosted_exc!r}) AND local fallback "
-                f"failed ({local_exc!r}). Start the local server with brev/serve-cuopt.sh."
+                f"failed ({local_exc!r}). Start a local cuOpt server "
+                f"(`cuopt-sh-client` / `cuopt_server`)."
             ) from local_exc
         raise RuntimeError(
             f"cuOpt local solve failed ({local_exc!r}) and no API key was set for the hosted "
-            f"service. Start the local server (brev/serve-cuopt.sh) or set CUOPT_API_KEY."
+            f"service. Start a local cuOpt server (`cuopt-sh-client` / `cuopt_server`) "
+            f"or set CUOPT_API_KEY."
         ) from local_exc
 
 
@@ -130,7 +132,7 @@ def _solve_self_hosted(data: dict, base_url: str) -> dict:
     ip = u.hostname or "localhost"
     port = u.port or 5000
 
-    # Preferred: the self-hosted client library (Arzaan added cuopt-sh-client to modellingsim).
+    # Preferred: the self-hosted `cuopt-sh-client` library.
     try:
         from cuopt_sh_client import CuOptServiceSelfHostClient
     except ImportError:

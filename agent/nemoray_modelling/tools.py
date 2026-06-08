@@ -6,7 +6,7 @@ calls these exactly as it will call the real backends; teammates swap the bodies
 for the genuine article without touching the agent:
 
     run_sionna_coverage  → W2  (Sionna RT radio map / dead zones)
-    run_cuopt            → cuOpt server (spike: modellingsim/smoke_test_cuopt.py)
+    run_cuopt            → cuOpt server (mast optimisation)
     validate_site        → W4  (EA LiDAR line-of-sight check)
 
 A tool returns a `ToolResult`:
@@ -700,8 +700,8 @@ class ToolRegistry:
         )
 
     def _run_cuopt(self, args: dict[str, Any]) -> ToolResult:
-        # Real path: when TWIN_URL is set (e.g. http://localhost:8011), drive Mehul's
-        # coverage-twin — POST /api/optimize runs the hosted-cuOpt set-cover MILP (+ RT
+        # Real path: when TWIN_URL is set (e.g. http://localhost:8011), drive the
+        # coverage twin — POST /api/optimize runs the hosted-cuOpt set-cover MILP (+ RT
         # verify) and writes out/new_masts.geojson, which we map into candidate proposals.
         # Unset or unreachable → the offline fixture below (keeps CI + the scripted demo
         # hermetic). See docs/NEXT_SESSION.md.
