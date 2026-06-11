@@ -33,7 +33,10 @@ MODEL="${MODEL:-nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4}"
 SERVED_NAME="${SERVED_NAME:-nemotron-3-super}"
 PARSER="super_v3"; PARSER_FILE="$HERE/super_v3_reasoning_parser.py"
 MAX_LEN="${MAX_LEN:-16384}"; MAX_SEQS="${MAX_SEQS:-2}"
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.85}"        # 120B needs most of the box
+# 0.75 of the 121.7 GiB pool ~= 91 GiB: ~75 GiB weights + a ~650k-token KV cache — still
+# 20x what the agent's 2x16k sequences need, while leaving ~30 GiB for the Sionna twin,
+# HUD and OS (0.85 pushed the box into swap when a verify ran alongside).
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.75}"
 QUANT="${QUANT:-fp4}"                       # super config declares plain fp4
 # cookbook extras for the 120B MoE on Spark
 EXTRA=(--async-scheduling --dtype auto --enable-chunked-prefill
