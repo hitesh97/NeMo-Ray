@@ -136,10 +136,21 @@ def optimize(cfg) -> dict:
     print(f"  {len(dem)} outdoor weak spots optimised"
           + (f" (largest of {n_total_outdoor}; cap {max_holes})" if capped else ""))
 
-    # Candidate sites = the weak-spot locations themselves: placing a mast at one hole
-    # covers it and its near/LOS neighbours. This dominating-set formulation keeps the
-    # MILP at <= max_holes binary variables, small enough for the hosted cuOpt solver.
-    cand = dem.copy()
+    # Candidate sites = a 90 m lattice over the weak areas (outside buildings), PLUS the
+    # weak-spot locations themselves. The lattice lets one mast sit BETWEEN holes and cover
+    # several at once — restricting candidates to the holes themselves degenerates the set
+    # cover to ~one mast per hole (49 masts for 53 holes, in visible clusters). Including
+    # each hole as its own candidate keeps every hole self-coverable, so the optimum can
+    # only be <= the old dominating-set answer. If the lattice outgrows the MILP budget,
+    # coarsen the spacing rather than dropping candidates.
+    grid_spacing = spacing
+    cand = _candidates_near(dem, grid_spacing, radius, tree)
+    max_candidates = int(cfg["cuopt"].get("max_candidates", 20000))
+    while len(cand) > max_candidates:
+        grid_spacing *= 1.5
+        cand = _candidates_near(dem, grid_spacing, radius, tree)
+        print(f"  candidate lattice coarsened to {grid_spacing:.0f} m ({len(cand)} sites)")
+    cand = np.vstack([cand, dem]) if len(cand) else dem.copy()
     rows = _coverage_rows(cand, dem, near, radius, tree)
     coverable = np.array([len(r) > 0 for r in rows])
     n_uncoverable = int((~coverable).sum())
