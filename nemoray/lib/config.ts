@@ -2,19 +2,18 @@
  * Runtime configuration + feature flags.
  *
  * The UI never branches on raw env vars directly — it reads these typed
- * constants so the mock↔real and placeholder↔deck swaps live in one place.
+ * constants so backend wiring lives in one place.
  */
 
-/** When true, `lib/api/*` resolve against `lib/mock/*` instead of the backend. */
-export const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
+/**
+ * Opt-in UI-only mode: when NEXT_PUBLIC_USE_MOCK=true the API routes skip the
+ * backend entirely (the agent console explains how to connect). Default is the
+ * real local stack.
+ */
+export const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === "true";
 
-/** Which map implementation `MapMount` renders. */
-export type MapImpl = "placeholder" | "deck";
-export const MAP_IMPL: MapImpl =
-  (process.env.NEXT_PUBLIC_MAP_IMPL as MapImpl) ?? "placeholder";
-
-/** Base URL of the real DGX-Spark backend (FastAPI). Empty in mock mode. */
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+/** Base URL of the local agent SSE bridge (agent/nemoray_modelling/server.py). */
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8001";
 
 /** App identity shown in the chrome. */
 export const APP = {

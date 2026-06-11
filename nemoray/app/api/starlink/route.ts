@@ -60,6 +60,36 @@ function propagateAll(
   return results;
 }
 
+// TLE source: live CelesTrak fetch (6 h in-memory cache) → bundled snapshot fallback.
+// TLEs decay fast; propagating today's clock over a stale snapshot drifts by hundreds of
+// km, so prefer the live set whenever the box is online.
+const CELESTRAK_URL =
+  "https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle";
+const TLE_TTL_MS = 6 * 3_600_000;
+let tleCache: { text: string; fetchedAt: number } | null = null;
+
+async function loadTleText(): Promise<string> {
+  const now = Date.now();
+  if (tleCache && now - tleCache.fetchedAt < TLE_TTL_MS) return tleCache.text;
+  try {
+    const res = await fetch(CELESTRAK_URL, {
+      headers: { "User-Agent": "NeMo-Ray/0.2 (+https://github.com/Harrishayy/NeMo-Ray)" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.ok) {
+      const text = await res.text();
+      if (text.includes("STARLINK")) {
+        tleCache = { text, fetchedAt: now };
+        return text;
+      }
+    }
+  } catch {
+    // offline — fall through to the last good fetch, then the bundled snapshot
+  }
+  if (tleCache) return tleCache.text;
+  return readFileSync(join(process.cwd(), "data", "starlink_tle.txt"), "utf-8");
+}
+
 let cachedResponse: { satellites: SatellitePosition[]; fetchedAt: string } | null = null;
 let cacheExpiry = 0;
 
@@ -69,8 +99,7 @@ export async function GET() {
     return Response.json(cachedResponse);
   }
 
-  const tlePath = join(process.cwd(), "data", "starlink_tle.txt");
-  const text = readFileSync(tlePath, "utf-8");
+  const text = await loadTleText();
   const blocks = parseTleBlocks(text);
 
   const date = new Date(now);

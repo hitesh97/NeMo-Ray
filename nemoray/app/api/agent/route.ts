@@ -32,28 +32,35 @@ function toAgentPayload(body: AgentBody): Record<string, unknown> {
 }
 
 /**
- * Streaming Nemotron endpoint (SSE). Real mode proxies the local Nemotron agent
- * service (agent/nemoray_modelling/server.py, default :8001); the scripted mock
- * runs were removed with the rest of the demo data. Without a backend the endpoint
- * streams a single notice over the same `AgentStreamEvent` wire protocol so the
- * console renders cleanly.
+ * Streaming Nemotron endpoint (SSE). Proxies the local Nemotron agent service
+ * (agent/nemoray_modelling/server.py, default :8001) and passes its
+ * `AgentStreamEvent` SSE frames straight through. If the agent service is
+ * unreachable (or NEXT_PUBLIC_USE_MOCK=true forces UI-only mode), the endpoint
+ * streams a single system notice over the same wire protocol so the console
+ * renders cleanly instead of erroring.
  */
 export async function POST(req: Request): Promise<Response> {
   const body = (await req.json().catch(() => ({}))) as AgentBody;
 
   // Real backend: translate to the agent's wire shape and pass the SSE through.
   if (!USE_MOCK && API_BASE) {
-    const upstream = await fetch(`${API_BASE}/agent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(toAgentPayload(body)),
-    });
-    return new Response(upstream.body, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache, no-transform",
-      },
-    });
+    try {
+      const upstream = await fetch(`${API_BASE}/agent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(toAgentPayload(body)),
+      });
+      if (upstream.ok && upstream.body) {
+        return new Response(upstream.body, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+          },
+        });
+      }
+    } catch {
+      // fall through to the notice below
+    }
   }
 
   const id = "sys-no-backend";
@@ -62,8 +69,9 @@ export async function POST(req: Request): Promise<Response> {
     {
       type: "token",
       text:
-        "Nemotron backend not connected. Set NEXT_PUBLIC_USE_MOCK=false and " +
-        "NEXT_PUBLIC_API_BASE to reach the DGX-Spark agent service.",
+        `Nemotron agent service unreachable at ${API_BASE}. Start the stack ` +
+        "(bash spark/up.sh, or `uvicorn nemoray_modelling.server:app --port 8001` " +
+        "from agent/) and try again.",
     },
     { type: "message_end", id },
   ];

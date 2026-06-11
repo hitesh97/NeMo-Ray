@@ -2,9 +2,7 @@
  * NeMo-Ray data contract.
  *
  * This is the seam between the UI and the DGX-Spark backend. Components import
- * ONLY from here (and `lib/api/*`) — never from `lib/mock/*` or raw backend
- * shapes. The map's two implementations (placeholder + Cesium) both satisfy
- * {@link MapSurfaceProps}.
+ * ONLY from here (and `lib/api/*`) — never raw backend shapes.
  */
 
 // ── primitives ──────────────────────────────────────────────────────────────
@@ -45,18 +43,6 @@ export interface Site {
 }
 
 // ── coverage / dead zones ───────────────────────────────────────────────────
-/**
- * Discrete signal bands. Retained for the dormant colour ramp in
- * `lib/geo/color.ts` (`LEVEL_RGB`, `mbpsToLevel`); the coverage heatmap that
- * consumed it has been removed.
- */
-export type CoverageLevel =
-  | "critical"
-  | "low"
-  | "medium"
-  | "good"
-  | "excellent";
-
 export interface DeadZone {
   id: string;
   /** Normalised centre + radius (placeholder). */
@@ -336,27 +322,6 @@ export interface CoverageTelemetry {
   };
 }
 
-/**
- * The ONE contract every map implementation satisfies. `MapPlaceholder` and
- * `CesiumScene` both accept exactly this — swapping is a single env flag
- * (`NEXT_PUBLIC_MAP_IMPL`).
- */
-export interface MapSurfaceProps {
-  sites: Site[];
-  deadZones: DeadZone[];
-  selectedSiteId: SiteId | null;
-  hoveredSiteId: SiteId | null;
-  deactivatedSiteIds: SiteId[];
-  proposals: Proposal[];
-  layers: Record<LayerId, LayerState>;
-  coverageStatus: CoverageStatus;
-  viewState?: MapViewState;
-  /** One-shot camera intent (nonce-deduped) dispatched from HUD chrome. */
-  cameraCommand?: CameraCommand | null;
-  onSelectSite(id: SiteId | null): void;
-  onHoverSite(id: SiteId | null): void;
-  onViewStateChange?(v: MapViewState): void;
-}
 
 // ── camera command bus ──────────────────────────────────────────────────────
 /** Camera intents a surface can honour. Dispatched via the store's nonce bus. */
