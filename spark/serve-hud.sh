@@ -32,8 +32,7 @@ cd "$REPO_ROOT/nemoray"
 echo "==> pnpm install"
 pnpm install
 
-# The HUD proxies its /api/agent to the agent SSE bridge (:8001).
-export NEXT_PUBLIC_USE_MOCK="${NEXT_PUBLIC_USE_MOCK:-false}"
+# The HUD proxies its /api/agent to the agent SSE bridge (:8001 by default, built in).
 export NEXT_PUBLIC_API_BASE="${NEXT_PUBLIC_API_BASE:-http://localhost:${AGENT_PORT:-8001}}"
 echo "==> Next.js HUD on 0.0.0.0:3000 (API_BASE=$NEXT_PUBLIC_API_BASE) — open http://localhost:3000"
 exec pnpm dev -- -H 0.0.0.0 -p 3000

@@ -31,7 +31,7 @@ satellite and keeping emergency services connected when the ground network canno
 | **[Mitsuba 3](https://mitsuba-renderer.org/)** v3.8.0 | Physically-based scene representation — each 2 km tile is a Mitsuba scene with ITU radio materials before the Sionna `RadioMapSolver` runs |
 | **[Dr.Jit](https://github.com/mitsuba-renderer/drjit)** v1.3.1 | Differentiable JIT compiler underlying Sionna RT; LLVM backend provides CPU fallback when no GPU is present |
 | **NVIDIA cuOpt API** | REST endpoint (`https://optimize.api.nvidia.com/v1/nvidia/cuopt`) accepting a MILP in JSON; `nvapi-` key from [build.nvidia.com](https://build.nvidia.com) |
-| **Nemotron NIM** | OpenAI-compatible `/v1/chat/completions` endpoint served by `scripts/serve_nemotron.sh` (vLLM, NVFP4); `nano` 30B fits alongside the twin; `super` 120B uses most of the box |
+| **Nemotron NIM** | OpenAI-compatible `/v1/chat/completions` endpoint served by `scripts/serve_nemotron.sh` (vLLM, NVFP4) — Nemotron-3 Super 120B, fully local on the Spark |
 | **`nvidia-smi`** | GPU utilisation + per-process memory telemetry sampled during the Sionna RT solve; published in `summary.json` and shown in the HUD KPI panel |
 
 ---
@@ -78,7 +78,7 @@ satellite and keeping emergency services connected when the ground network canno
 | **MapLibre GL** | 5.24.0 | WebGL base map (streets, terrain) |
 | `@deck.gl/mapbox` | 9.3.3 | `MapboxOverlay` — mounts deck layers over MapLibre |
 | **Zustand** | 5.0.14 | Global state store (scenario, network, layers, agent, timeline, camera) |
-| **Radix UI** | ^1 | Accessible dialog, slider, switch, tooltip primitives |
+| **Radix UI** | ^1 | Accessible slider, switch, tooltip primitives |
 | **Motion** (Framer) | 12.40.0 | Animation (panel transitions, streaming tokens) |
 | `satellite.js` | 7.0.1 | Client-side Starlink TLE propagation (orbit arc overlay) |
 | `lucide-react` | 1.17.0 | Icon set |
@@ -93,7 +93,6 @@ satellite and keeping emergency services connected when the ground network canno
 | Nemotron NIM | NVIDIA (local vLLM) | LLM chat completions for the agent ReAct loop |
 | ElevenLabs Scribe (STT) | ElevenLabs | Voice-to-text in the HUD agent composer |
 | ElevenLabs TTS turbo | ElevenLabs | Text-to-speech for agent responses |
-| OpenCellID | Community | Live EE tower locations (MNC 20/30) via `/api/sitefinder` |
 | MapTiler | MapTiler | Raster/vector base map tiles (`NEXT_PUBLIC_MAPTILER_KEY`) |
 
 ---
@@ -139,7 +138,7 @@ NeMo-Ray/
 │
 ├── agent/                      # Nemotron resilience agent (FastAPI/SSE)
 │   └── nemoray_modelling/
-│       ├── agent.py            # ReAct loop (LlamaCppPlanner + StubPlanner)
+│       ├── agent.py            # ReAct loop (LlamaCppPlanner → local Nemotron Super)
 │       ├── tools.py            # 12 tools: outage, COW, cuOpt, Sionna, Starlink, …
 │       ├── server.py           # FastAPI SSE bridge (POST /agent, GET /health)
 │       ├── events.py           # AgentStreamEvent frame builders (wire protocol)
@@ -167,29 +166,26 @@ NeMo-Ray/
 │   ├── store/                  # Zustand store (index.ts) + selector hooks
 │   ├── data/                   # London CSVs: sitefinder-proxy, fire/police/hospitals
 │   ├── public/
-│   │   ├── raytracing/         # Pipeline artifacts (gitignored; regenerate via pipeline)
+│   │   ├── raytracing/         # Pipeline artifacts (gitignored; seeded from out/, regenerated per run)
 │   │   ├── geo/                # landmarks.json (gazetteer for map labels + agent KG)
 │   │   └── icons/              # Emergency-service map-pin SVGs
 │   └── docs/                   # INVARIANTS.md, DESIGN-SYSTEM.md
 │
-├── data/                       # Input datasets
-│   ├── greater-london-latest.osm.pbf   # Geofabrik OSM extract (~120 MB)
-│   ├── buildings.pkl           # Cached building footprints (PyOsmium output)
-│   ├── tiles/                  # Per-tile Sionna scene + result cache
+├── data/                       # Input datasets (see data/README.md for CRS notes)
+│   ├── SITEFINDER_MAY_2012.csv         # Ofcom Sitefinder base dataset (full UK)
+│   ├── greater-london-latest.osm.pbf   # Geofabrik OSM extract (~120 MB, LFS)
+│   ├── buildings.pkl           # Cached building footprints (PyOsmium output, LFS)
+│   ├── tiles/                  # Per-tile Sionna scene + result cache (LFS)
 │   ├── emergency/              # Fire / police / hospital CSVs
-│   └── starlink_tle.txt        # Starlink Two-Line Elements
-│
-├── datasets/                   # Retrieved + processed datasets with provenance notes
-│   ├── retrieved/              # SITEFINDER_London_EEproxy.csv, police-counters.csv
-│   └── processed/              # Derived pipeline outputs
+│   ├── retrieved/              # Raw source datasets (provenance copies)
+│   └── lidar/auto/             # EA LiDAR tiles auto-fetched by validate_site (gitignored)
 │
 ├── scripts/
-│   └── serve_nemotron.sh       # Launch Nemotron NIM (vLLM NVFP4) on DGX Spark
+│   ├── serve_nemotron.sh       # Launch Nemotron Super NIM (vLLM NVFP4) on DGX Spark
+│   └── super_v3_reasoning_parser.py    # vLLM reasoning parser for the NVFP4 checkpoint
 │
 ├── spark/                      # DGX Spark (GB10) deployment scripts
-├── brev/                       # Brev H200 cloud mirror
-├── out/                        # Legacy pipeline output dir
-├── SITEFINDER_MAY_2012.csv     # Ofcom Sitefinder base dataset (full UK)
+├── out/                        # Committed seed artifacts (LFS) — copied into the HUD on first run
 ├── config.yaml                 # Pipeline configuration (bbox, radio, tiling, cuOpt)
 ├── requirements.txt            # Python deps for src/ (pip/venv path)
 ├── pyproject.toml              # uv workspace config
@@ -201,7 +197,7 @@ NeMo-Ray/
 ## Architecture Overview
 
 ```text
-SITEFINDER_MAY_2012.csv ─┐
+data/SITEFINDER_MAY_2012.csv ─┐
 data/greater-london.osm.pbf ─┴──► src/ (Python pipeline, GPU)
                                    │  Sionna RT tiled coverage solve
                                    │  cuOpt MILP mast placement
@@ -305,7 +301,8 @@ NEMOTRON_BASE_URL=http://localhost:8080 \
   uvicorn nemoray_modelling.server:app --port 8001
 ```
 
-The `StubPlanner` provides deterministic offline behaviour when no NIM is running.
+The agent requires the local NIM; if it is unreachable, runs surface a clear planner
+error in the HUD console (there is no scripted stand-in).
 
 ---
 
@@ -383,8 +380,7 @@ Environment variables (`.env.example`):
 | `CUOPT_API_KEY` | NVIDIA cuOpt hosted-API key (`nvapi-…`) |
 | `TWIN_URL` | Coverage-twin base URL (default `http://localhost:8000`) |
 | `NEMOTRON_BASE_URL` | Nemotron NIM base URL (default `http://localhost:8080`) |
-| `NEMOTRON_MODEL` | Model ID passed to the NIM |
-| `AGENT_LLM` | `auto` \| `nim` \| `stub` |
+| `NEMOTRON_MODEL` | Model ID passed to the NIM (`nemotron-3-super`) |
 | `LIDAR_DSM` / `LIDAR_DTM` | Paths to EA LiDAR rasters for real LoS checks |
 | `NEXT_PUBLIC_MAPTILER_KEY` | MapTiler base-map API key |
 | `ELEVENLABS_API_KEY` | ElevenLabs voice API key (STT + TTS) |

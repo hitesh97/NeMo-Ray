@@ -3,9 +3,8 @@
 # detached, logging to $NEMORAY_LOG_DIR (default ~/nemoray-logs). Idempotent: skips a
 # service whose port/container is already live.
 #
-#   bash spark/up.sh            # nemotron (super, 120B) + twin + agent
+#   bash spark/up.sh            # nemotron (super 120B NVFP4) + twin + agent
 #   bash spark/up.sh --hud      # …also start the Next.js HUD on :3000
-#   bash spark/up.sh --nano     # use the lighter 30B 'nano' profile (co-resident with a solve)
 #
 # Stop everything with:  bash spark/down.sh
 set -euo pipefail
@@ -17,8 +16,7 @@ cd "$REPO_ROOT"
 HUD=0
 for a in "$@"; do case "$a" in
   --hud)   HUD=1 ;;
-  --nano)  export MODEL_PROFILE=nano;  export NEMOTRON_MODEL="${NEMOTRON_MODEL:-nemotron-3-nano}" ;;
-  *) echo "unknown arg: $a (use --hud, --nano)" >&2; exit 1 ;;
+  *) echo "unknown arg: $a (use --hud)" >&2; exit 1 ;;
 esac; done
 
 LOG_DIR="${NEMORAY_LOG_DIR:-$HOME/nemoray-logs}"; mkdir -p "$LOG_DIR"

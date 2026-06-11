@@ -39,7 +39,7 @@ Everything is preinstalled on DGX OS (verify Docker's GPU runtime with `docker i
 
 ```bash
 cd ~/NeMo-Ray
-cp .env.example .env           # set CUOPT_API_KEY (for --opt). NEMOTRON_MODEL stays nemotron-3-nano.
+cp .env.example .env           # set CUOPT_API_KEY (for --opt). NEMOTRON_MODEL=nemotron-3-super.
 nano .env
 
 bash spark/setup.sh            # provisions both workloads (idempotent; first time only)
@@ -47,9 +47,9 @@ bash spark/setup.sh            # provisions both workloads (idempotent; first ti
 bash spark/run-pipeline.sh     # coverage solve → public/raytracing/* (add --opt for cuOpt+verify)
 
 # One command for the whole serving stack (detached, logs in ~/nemoray-logs):
-bash spark/up.sh --hud         # nemotron(nano) + twin + agent + HUD
+bash spark/up.sh --hud         # nemotron super (120B NVFP4) + twin + agent + HUD
 #   …or run each in its own terminal:
-#   bash spark/serve-nemotron.sh   # vLLM NVFP4 nano on :8080  (MODEL_PROFILE=super for the 120B)
+#   bash spark/serve-nemotron.sh   # vLLM NVFP4 super (120B) on :8080
 #   bash spark/serve-twin.sh       # twin on :8000
 #   bash spark/serve-agent.sh      # agent SSE on :8001
 #   bash spark/serve-hud.sh        # HUD on :3000
@@ -68,17 +68,13 @@ ssh -L 3000:localhost:3000 -L 8001:localhost:8001 <spark-host>
 # then open http://localhost:3000 on the laptop
 ```
 
-## nano vs super (which Nemotron profile)
+## The model
 
-| Profile | Weights | Default on Spark? | When |
-|---|---|---|---|
-| **nano** (30B-A3B NVFP4) | ~42 GB @ util 0.35 | **yes** | co-resident with the twin + a live Sionna solve — the demo default |
-| **super** (120B-A12B NVFP4) | ~78 GB | opt-in (`--super`) | best reasoning; owns most of the box — run the pipeline first, don't solve concurrently |
-
-```bash
-bash spark/up.sh --super       # whole stack on the 120B
-MODEL_PROFILE=super bash spark/serve-nemotron.sh   # just the NIM, on the 120B
-```
+The stack runs **Nemotron-3 Super (120B-A12B, NVFP4)** locally via vLLM — ~78 GB of weights
+at `gpu-memory-utilization 0.85`, owning most of the 121 GB unified pool. Run the Sionna
+pipeline FIRST (`spark/run-pipeline.sh`), then bring the NIM up; avoid launching heavy
+solves while the model is loading. Live re-simulation via the twin (`/api/coverage`) uses
+only ~2 GB and co-exists fine once the NIM is resident.
 
 ## Files
 
@@ -87,7 +83,7 @@ MODEL_PROFILE=super bash spark/serve-nemotron.sh   # just the NIM, on the 120B
 | `setup.sh` | Provision the Spark: data (LFS), Sionna venv (`--system-site-packages`), agent venv, pull the vLLM image |
 | `up.sh` / `down.sh` | One-command bring-up / teardown of the whole serving stack (detached) |
 | `run-pipeline.sh` | Sionna solve for `westminster_canary` (+ `--opt` for cuOpt+verify) |
-| `serve-nemotron.sh` | vLLM NVFP4 NIM (nano default) on :8080 — wraps `scripts/serve_nemotron.sh` |
+| `serve-nemotron.sh` | vLLM NVFP4 NIM (Nemotron-3 Super 120B) on :8080 — wraps `scripts/serve_nemotron.sh` |
 | `serve-twin.sh` | Coverage twin (`python -m src.serve`) on :8000 |
 | `serve-agent.sh` | Agent SSE bridge (`agent/`) on :8001 |
 | `serve-hud.sh` | Next.js HUD on :3000 |

@@ -80,13 +80,13 @@ docker pull "${IMAGE:-vllm/vllm-openai:v0.20.0}" || echo "  (pull failed/skipped
 # ---------------------------------------------------------------------------
 say "Done. Bring the whole stack up with one command:"
 cat <<EOF
-  All services (nemotron nano + twin + agent):   bash spark/up.sh
+  All services (nemotron super + twin + agent):  bash spark/up.sh
   …add the HUD too:                              bash spark/up.sh --hud
   Stop everything:                               bash spark/down.sh
 
   Or run each in its own terminal / tmux pane:
   1. Coverage solve   : bash spark/run-pipeline.sh          # 25-tile westminster_canary (--opt for cuOpt+verify)
-  2. Nemotron NIM     : bash spark/serve-nemotron.sh        # vLLM NVFP4 nano on :8080 (super: MODEL_PROFILE=super)
+  2. Nemotron NIM     : bash spark/serve-nemotron.sh        # vLLM NVFP4 super (120B) on :8080
                         (first run pulls the NVFP4 weights into \${HF_CACHE:-~/.cache/huggingface})
   3. Twin backend     : bash spark/serve-twin.sh            # python -m src.serve on :8000
   4. Agent SSE bridge : bash spark/serve-agent.sh           # uvicorn on :8001

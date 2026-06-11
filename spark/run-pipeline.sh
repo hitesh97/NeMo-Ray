@@ -6,7 +6,8 @@
 #   bash spark/run-pipeline.sh            # coverage solve only
 #   bash spark/run-pipeline.sh --opt      # + cuOpt mast placement + RT verify
 #
-# Memory note: a solve uses ~2 GB of the unified pool, so it coexists with the nano NIM.
+# Memory note: a solve uses ~2 GB of the unified pool. Run the solve BEFORE bringing the
+# 120B NIM up (it claims most of the unified memory).
 # If the 120B 'super' NIM is loaded it owns most of the box — run the solve first, then serve.
 set -euo pipefail
 

@@ -12,7 +12,6 @@ cd "$REPO_ROOT"
 
 export TWIN_URL="${TWIN_URL:-http://localhost:8000}"
 export NEMOTRON_BASE_URL="${NEMOTRON_BASE_URL:-http://localhost:8080}"
-# super (120B) is the spark/ default profile; override to nemotron-3-nano if you serve the 30B.
 export NEMOTRON_MODEL="${NEMOTRON_MODEL:-nemotron-3-super}"
 
 # uv is installed to ~/.local/bin, which isn't on a non-login SSH PATH.
