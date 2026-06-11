@@ -1,14 +1,14 @@
 {
   "verified": true,
-  "former_holes": 72,
-  "serviceable_holes": 53,
-  "serviceable_holes_now_served": 53,
+  "former_holes": 5,
+  "serviceable_holes": 5,
+  "serviceable_holes_now_served": 5,
   "coverage_of_serviceable_holes_pct": 100.0,
-  "former_holes_now_served": 65,
-  "coverage_of_former_holes_pct": 90.3,
-  "served_pct_after": 99.78,
-  "remaining_hotspots": 9,
-  "affected_tiles": 12,
-  "new_masts": 49,
-  "new_rays": 22658
+  "former_holes_now_served": 5,
+  "coverage_of_former_holes_pct": 100.0,
+  "served_pct_after": 99.89,
+  "remaining_hotspots": 2,
+  "affected_tiles": 16,
+  "new_masts": 45,
+  "new_rays": 38360
 }
