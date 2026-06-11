@@ -12,6 +12,9 @@ dependencies = [
     "skyfield>=1.49",
     # fire-station EPSG:27700 -> WGS84 transform in emergency.py.
     "pyproj>=3.6",
+    # validate_site — EA LiDAR DSM/DTM raster reads (auto-fetched tiles).
+    "rasterio>=1.3",
+    "numpy>=1.26",
 ]
 
 [build-system]

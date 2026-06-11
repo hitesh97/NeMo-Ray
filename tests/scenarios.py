@@ -1,11 +1,12 @@
-"""Exhaustive agent scenario sweep against the RUNNING twin (:8000).
+"""Exhaustive agent tool sweep against the RUNNING twin (:8000).
 
 Run in the AGENT venv (has httpx + skyfield + the package):
-    TWIN_URL=http://localhost:8000 PYTHONPATH=. agent/.venv/bin/python -m tests.scenarios
-(or from agent/: TWIN_URL=... .venv/bin/python -m ... )
+    TWIN_URL=http://localhost:8000 PYTHONPATH=agent agent/.venv/bin/python -m tests.scenarios
 
-Checks, for every scenario: the right tools fire, observations have the expected shape, and
-— critically — that each network change RE-TRACES rays (out/new_rays.geojson is non-empty).
+Checks, for every resilience tool: the right backend answers, observations have the
+expected shape, and — critically — that each network change RE-TRACES rays
+(out/new_rays.geojson is non-empty). The agent loop itself (planner → tools) is
+exercised by tests/integration_nim.py against the live Nemotron NIM.
 """
 from __future__ import annotations
 
@@ -15,11 +16,9 @@ import time
 import httpx
 
 os.environ.setdefault("TWIN_URL", "http://localhost:8000")
-os.environ.setdefault("AGENT_LLM", "stub")
 TWIN = os.environ["TWIN_URL"].rstrip("/")
 
-from nemoray_modelling import StubPlanner, run_agent          # noqa: E402
-from nemoray_modelling.tools import ToolRegistry              # noqa: E402
+from nemoray_modelling.tools import ToolRegistry  # noqa: E402
 
 IDS = ["TQ3461880911", "TQ3460081200", "TQ3460081260"]       # real central-London EE masts
 PASS, FAIL = [], []
@@ -33,7 +32,7 @@ def check(name, cond, detail=""):
 def rays() -> int:
     try:
         return len(httpx.get(f"{TWIN}/out/new_rays.geojson", timeout=15).json().get("features", []))
-    except Exception as e:
+    except Exception:
         return -1
 
 
@@ -46,14 +45,6 @@ def reset_rays():
         pass
 
 
-def run_flow(prompt, selected=None):
-    frames = list(run_agent(prompt, planner=StubPlanner(selected_site_ids=selected)))
-    tools = [f["call"]["name"] for f in frames if f["type"] == "tool_call"]
-    final = "".join(f.get("text", "") for f in frames if f["type"] == "token")
-    err = [f["message"] for f in frames if f["type"] == "error"]
-    return tools, final, err
-
-
 def main() -> int:
     print("\n=== 1. simulate_outage (real masts) ===")
     reg = ToolRegistry()
@@ -64,9 +55,11 @@ def main() -> int:
     check("served_pct present", o.get("served_pct") is not None, str(o.get("served_pct")))
     check("rays recomputed", rays() > 0, f"{rays()} rays, {time.time()-t0:.0f}s")
 
-    print("\n=== 2. simulate_outage (empty ids) → fixture, no crash ===")
+    print("\n=== 2. simulate_outage (no ids) → default scenario outage, real twin ===")
     r = reg.run("simulate_outage", {"site_ids": []})
-    check("empty outage = fixture", r.observation.get("source") == "fixture", r.observation.get("source"))
+    o = r.observation
+    check("default outage resolves masts", bool(o.get("disabled_cells")), str(o.get("disabled_cells")))
+    check("default outage real source", o.get("source") == "Sionna RT coverage twin", o.get("source"))
 
     print("\n=== 3. move_mast ===")
     reset_rays()
@@ -86,40 +79,39 @@ def main() -> int:
     check("depot is a fire station", "Fire Station" in (o.get("source_station", {}) or {}).get("name", ""),
           (o.get("source_station") or {}).get("name"))
     check("buildings protected > 0", (o.get("buildings_protected") or 0) > 0, str(o.get("buildings_protected")))
+    check("hole closure verified by twin", bool(o.get("verified")), str(o.get("verified")))
     check("deploy rays recomputed", rays() > 0, f"{rays()} rays, {time.time()-t0:.0f}s")
 
-    print("\n=== 6. check_starlink (after COW) ===")
+    print("\n=== 6. check_starlink (after COW) — live Skyfield ===")
     r = reg.run("check_starlink", {})
     o = r.observation
-    check("satellite identified", bool(o.get("satellite")), str(o.get("satellite")))
-    check("starlink source", o.get("source") in ("Skyfield (Starlink TLEs)", "fixture"), o.get("source"))
+    check("starlink real source", o.get("source") == "Skyfield (Starlink TLEs)", o.get("source"))
+    check("satellite or honest empty-sky", "satellite" in o, str(o.get("satellite")))
 
     print("\n=== 7. check_starlink (no COW, no coords) → graceful ===")
     r2 = ToolRegistry().run("check_starlink", {})
-    check("starlink no-context handled", "error" in r2.observation or r2.observation.get("satellite"), r2.result[:50])
+    check("starlink no-context handled", "error" in r2.observation, r2.result[:50])
 
-    print("\n=== 8. STUB FLOW: outage → cow → starlink ===")
-    tools, final, err = run_flow("simulate the selected masts going offline", selected=IDS)
-    check("outage flow tools", tools[:1] == ["simulate_outage"], str(tools))
-    check("outage flow no errors", not err, str(err))
-    check("outage flow has final", len(final) > 20, final[:60])
+    print("\n=== 8. validate_site — real EA LiDAR (WCS auto-fetch) ===")
+    r = reg.run("validate_site", {"candidate_id": "sweep-1", "lat": 51.5045, "lng": -0.0900})
+    o = r.observation
+    check("lidar verdict is real or honest-unknown",
+          (o.get("source") == "EA-LiDAR (overshadowing)" and o.get("verdict") in ("pass", "fail"))
+          or o.get("verdict") == "unknown",
+          f"{o.get('verdict')} via {o.get('source')}")
 
-    print("\n=== 9. STUB FLOW: deploy a cell-on-wheels ===")
-    tools, final, err = run_flow("deploy a cell-on-wheels and check starlink")
-    check("deploy flow runs deploy_cow", "deploy_cow" in tools, str(tools))
-    check("deploy flow checks starlink", "check_starlink" in tools, str(tools))
-    check("deploy flow final", len(final) > 20, final[:60])
+    print("\n=== 9. run_cuopt (via twin) ===")
+    t0 = time.time(); r = reg.run("run_cuopt", {"dead_zone_ids": []})
+    o = r.observation
+    check("cuopt produced candidates", (o.get("candidate_count") or 0) > 0,
+          f"{o.get('candidate_count')} in {time.time()-t0:.0f}s")
+    check("cuopt source named", o.get("source", "").startswith(("cuOpt", "cuOpt output")), o.get("source"))
 
-    print("\n=== 10. STUB FLOW: optimise (cuOpt reject→retry→accept) ===")
-    t0 = time.time(); tools, final, err = run_flow("optimise new mast placement to fix the gaps")
-    check("optimise runs cuopt", "run_cuopt" in tools, str(tools))
-    check("optimise validates", "validate_site" in tools, f"{tools} ({time.time()-t0:.0f}s)")
-    check("optimise final", len(final) > 10, final[:60])
-
-    print("\n=== 11. STUB FLOW: help / capabilities ===")
-    tools, final, err = run_flow("what is this system and what can you do?")
-    check("help fires no tools", tools == [], str(tools))
-    check("help has real answer", "resilience" in final.lower() or "cell-on-wheels" in final.lower(), final[:60])
+    print("\n=== 10. knowledge graph quick checks ===")
+    r = reg.run("locate_place", {"query": "tower bridge"})
+    check("locate_place resolves", r.observation.get("source") == "knowledge-graph", r.result[:50])
+    r = reg.run("find_nearest", {"kind": "fire", "lat": 51.5045, "lng": -0.09})
+    check("find_nearest answers", bool(r.observation.get("name")), r.result[:60])
 
     print(f"\n=== RESULT: {len(PASS)} passed, {len(FAIL)} failed ===")
     if FAIL:

@@ -4,7 +4,7 @@ Runs the twin's HTTP server in a daemon thread and drives the agent with the REA
 LlamaCppPlanner pointed at the local NIM, so the model itself chooses the tools and they
 hit the live GPU twin. Run from repo root with the TWIN venv (PYTHONPATH=agent):
 
-    NEMOTRON_BASE_URL=http://localhost:8080 NEMOTRON_MODEL=nemotron-3-nano \
+    NEMOTRON_BASE_URL=http://localhost:8080 NEMOTRON_MODEL=nemotron-3-super \
     PYTHONPATH=agent .venv/bin/python -m tests.integration_nim
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ def main() -> int:
 
     planner = LlamaCppPlanner(
         base_url=os.environ["NEMOTRON_BASE_URL"],
-        model=os.environ.get("NEMOTRON_MODEL", "nemotron-3-nano"),
+        model=os.environ.get("NEMOTRON_MODEL", "nemotron-3-super"),
     )
     event = ("Two EE masts have gone offline. Assess the coverage lost, say which "
              "emergency-service buildings are affected, then deploy a Cell-on-Wheels and "

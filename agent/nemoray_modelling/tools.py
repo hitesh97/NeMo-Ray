@@ -1,38 +1,28 @@
 """
 Tool registry for the Nemotron resilience agent.
 
-Each tool here is a *stub* with a clean interface. The agent loop (`agent.py`)
-calls these exactly as it will call the real backends; teammates swap the bodies
-for the genuine article without touching the agent:
+Every tool drives a real backend or real data — there are no scripted fixtures:
 
-    run_sionna_coverage  → W2  (Sionna RT radio map / dead zones)
-    run_cuopt            → cuOpt server (mast optimisation)
-    validate_site        → W4  (EA LiDAR line-of-sight check)
+    run_sionna_coverage / simulate_outage / move_mast / deploy_cow
+        → the coverage twin (`src/serve.py`, TWIN_URL) — Sionna RT re-simulation.
+          With the twin down, coverage tools degrade to the pipeline's real
+          artifacts (hotspots/masts/new_masts .geojson) and say so in `source`.
+    run_cuopt       → the twin's /api/optimize (NVIDIA cuOpt MILP + RT verify).
+    validate_site   → EA National LiDAR Programme rasters (auto-fetched from the
+                      EA WCS around the candidate and cached under data/lidar/).
+    check_starlink  → Skyfield over live CelesTrak Starlink TLEs (see tle.py).
+    find_nearest / locate_place / nearby_places / describe_network / find_masts
+        → the spatial knowledge graph (places.py) + the London emergency CSVs.
 
 A tool returns a `ToolResult`:
   • `result`      — a short human string shown on the frontend tool card.
   • `observation` — the structured payload fed back to the model next turn.
+  • `ui_actions`  — map directives (highlights / camera) streamed to the HUD.
 
-`ToolRegistry` is instantiated *per agent run* because some stubs are stateful
-(e.g. `validate_site` fails the first candidate then passes, to exercise the
-reject → re-prompt → accept loop — the demo "money shot").
-
-────────────────────────────────────────────────────────────────────────────
-FALLBACKS — READ THIS IF YOU CONSUME THESE TOOLS (UI / agent integrators)
-────────────────────────────────────────────────────────────────────────────
-Every tool has a *real* backend (gated by an env var) and a deterministic
-*fixture* fallback so CI and a GPU-/twin-free demo still run. When a real
-backend is unset or unreachable, the tool silently returns illustrative — NOT
-measured — numbers. Two signals tell you a fallback fired:
-
-  1. Machine-readable: ``observation["source"]`` is ``"fixture"`` (real paths
-     name their backend, e.g. "Sionna RT coverage twin" / "EA-LiDAR ..." /
-     "Skyfield (Starlink TLEs)"). **The HUD should branch on this** and badge
-     fixture results as SIMULATED rather than presenting them as real.
-  2. Human-readable: a ``[NeMo-Ray FALLBACK] <tool>: <reason>`` line is printed
-     to **stderr** (the agent-server console) naming which fallback fired and
-     why (TWIN_URL unset, twin unreachable, LiDAR rasters missing, skyfield not
-     installed, …) — so you can see *what failed* during a live run.
+When a backend is unreachable AND no real artifact can answer, the tool returns
+an honest error observation (never invented numbers) telling the operator what
+to start. ``observation["source"]`` always names where the figures came from;
+a ``[NeMo-Ray DEGRADED] <tool>: <reason>`` stderr line flags any degradation.
 """
 
 from __future__ import annotations
@@ -81,13 +71,13 @@ def _union_bbox(bboxes: list[list[float]]) -> list[float] | None:
     ]
 
 
-def _warn_fallback(tool: str, reason: str) -> None:
-    """Announce on stderr that `tool` fell back to offline/fixture data, and why. The matching
-    machine-readable signal is ``observation["source"] == "fixture"`` — see the FALLBACKS note
-    at the top of this module. Keep `reason` short and specific (what real backend was missing
-    or failed) so a live-run console makes the failure obvious."""
+def _warn_degraded(tool: str, reason: str) -> None:
+    """Announce on stderr that `tool` degraded from its primary backend (e.g. live twin →
+    pipeline artifact, or an honest error), and why. The machine-readable counterpart is
+    ``observation["source"]``, which always names where the figures came from. Keep `reason`
+    short and specific so a live-run console makes the failure obvious."""
     print(
-        f"[NeMo-Ray FALLBACK] {tool}: {reason} → returning offline fixture data",
+        f"[NeMo-Ray DEGRADED] {tool}: {reason}",
         file=sys.stderr,
         flush=True,
     )
@@ -117,11 +107,17 @@ def _repo_root() -> Path:
 
 @lru_cache(maxsize=1)
 def _mast_positions() -> dict[str, list[float]]:
-    """Map mast id → [lng, lat] from the pipeline's masts.geojson, so an outage can draw its
-    dead zones where the downed masts actually stood. Best-effort: that artifact is gitignored
-    (the pipeline regenerates it), so this returns {} when absent and callers fall back."""
-    path = _repo_root() / "nemoray" / "public" / "raytracing" / "masts.geojson"
-    if not path.exists():
+    """Map mast id → [lng, lat] from the pipeline's masts.geojson (the live copy under
+    nemoray/public/raytracing, else the committed out/ seed), so an outage can draw its
+    dead zones where the downed masts actually stood. Returns {} when absent."""
+    root = _repo_root()
+    path = None
+    for rel in ("nemoray/public/raytracing/masts.geojson", "out/masts.geojson"):
+        p = root / rel
+        if p.exists():
+            path = p
+            break
+    if path is None:
         return {}
     try:
         data = json.loads(path.read_text())
@@ -140,8 +136,8 @@ def _mast_positions() -> dict[str, list[float]]:
 
 def _zones_for_sites(site_ids: list[str]) -> list[dict[str, Any]]:
     """Dead-zone features centred on each downed mast's real position (a coverage hole opens
-    where the mast was). Empty when no position resolves (artifact missing) → caller falls back
-    to the two central fixture zones."""
+    where the mast was). Empty when no position resolves (artifact missing) → caller returns an
+    honest error."""
     pos = _mast_positions()
     feats: list[dict[str, Any]] = []
     for sid in site_ids:
@@ -179,7 +175,7 @@ def _zones_near_sites(
     if not pts:
         # No downed-mast position resolved — return nothing rather than the whole scene's
         # holes, so a missing artifact can never strand a COW across the city. Callers fall
-        # back to drawing zones at the masts, then to the central fixtures.
+        # back to drawing zones at the masts, then to an honest error.
         return []
     out: list[dict[str, Any]] = []
     for f in feats:
@@ -298,10 +294,7 @@ class ToolRegistry:
         self._calls[name] = self._calls.get(name, 0) + 1
         return spec.run(args or {})
 
-    def call_count(self, name: str) -> int:
-        return self._calls.get(name, 0)
-
-    # ── stub implementations ────────────────────────────────────────────────────
+    # ── tool implementations ────────────────────────────────────────────────────
     def _register_defaults(self) -> None:
         self._add(
             "run_sionna_coverage",
@@ -582,25 +575,19 @@ class ToolRegistry:
     ) -> None:
         self._specs[name] = ToolSpec(name, description, parameters, run)
 
-    # Stubs return realistic-looking fixtures. Shapes mirror nemoray/types/coverage.ts
-    # (DeadZone) and lib/types.ts (Proposal.validation) so the swap to real
-    # backends is a body change, not an interface change.
     def _run_sionna_coverage(self, args: dict[str, Any]) -> ToolResult:
-        # Real path: TWIN_URL set → POST /api/coverage to re-run Sionna RT with the given
-        # masts disabled (tower-down → fresh holes). Falls back to the fixture when the twin
-        # is unset/unreachable OR when nothing real was disabled (e.g. the scripted demo's
-        # placeholder cell id), so CI + the offline money-shot stay hermetic.
-        disabled = args.get("disabled_cells", []) or ["A3B"]
+        # Primary: TWIN_URL set → POST /api/coverage to re-run Sionna RT with the given masts
+        # disabled (tower-down → fresh holes). With the twin down, degrade to the REAL coverage
+        # holes the pipeline wrote (hotspots.geojson — exactly the dashboard heatmap's dead
+        # zones). With neither, return an honest error — never invented zones.
+        disabled = list(args.get("disabled_cells", []) or [])
         twin = os.environ.get("TWIN_URL", "").rstrip("/")
         if twin:
-            real = self._coverage_via_twin(twin, disabled)  # warns on its own fallbacks
+            real = self._coverage_via_twin(twin, disabled)  # warns on its own degradation
             if real is not None:
                 return real
         else:
-            _warn_fallback("run_sionna_coverage", "TWIN_URL not set")
-        # Offline fixture: prefer the REAL coverage holes the pipeline wrote (hotspots.geojson —
-        # exactly the dashboard heatmap's dead zones) so we show the true multi-zone map and
-        # paint every hole, instead of two hardcoded Westminster boxes.
+            _warn_degraded("run_sionna_coverage", "TWIN_URL not set")
         from .places import load_hotspots
 
         hs = load_hotspots()
@@ -631,22 +618,22 @@ class ToolRegistry:
                 },
                 ui_actions=[{"op": "clear"}, zaction],
             )
-        # Last-resort scripted holes (no artifact present, e.g. a fresh clone before any run).
-        _warn_fallback("run_sionna_coverage", "hotspots.geojson absent — using scripted zones")
-        dead_zones = [
-            {"id": "dz-westminster-01", "centroid": [-0.1357, 51.4975], "severity": "critical"},
-            {"id": "dz-southbank-02", "centroid": [-0.1145, 51.5045], "severity": "major"},
-        ]
+        # No twin and no artifact: be honest about it.
+        _warn_degraded("run_sionna_coverage", "no twin and no hotspots.geojson artifact")
         return ToolResult(
-            result=f"2 dead zones after disabling {', '.join(disabled)} "
-            f"(1 critical, 1 major) @ 250 m resolution",
-            observation={"disabled_cells": disabled, "dead_zones": dead_zones, "source": "fixture"},
+            result="Coverage data unavailable — start the coverage twin (python -m src.serve) "
+            "or run the pipeline (python -m src.pipeline) first.",
+            observation={
+                "error": "no coverage backend",
+                "detail": "TWIN_URL unreachable and hotspots.geojson absent",
+                "source": "none",
+            },
         )
 
     def _coverage_via_twin(self, twin: str, disabled: list[str]) -> ToolResult | None:
         """Re-run the twin's coverage with `disabled` masts removed; map the resulting
-        out/hotspots.geojson into dead zones. Returns None to fall back to the fixture when
-        the twin errors or nothing real was disabled (so the scripted id keeps the demo)."""
+        out/hotspots.geojson into dead zones. Returns None when the twin errors or nothing
+        real was disabled, so the caller degrades to the pipeline artifact."""
         import httpx
 
         try:
@@ -658,12 +645,12 @@ class ToolRegistry:
                 g.raise_for_status()
                 feats = g.json().get("features", [])
         except Exception as exc:
-            _warn_fallback("run_sionna_coverage", f"twin /api/coverage unreachable ({exc!r})")
+            _warn_degraded("run_sionna_coverage", f"twin /api/coverage unreachable ({exc!r})")
             return None
 
-        # Nothing real disabled (e.g. an unknown cell id) → let the fixture drive.
+        # Nothing real disabled (e.g. an unknown cell id) → degrade to the artifact.
         if not summary.get("disabled_matched"):
-            _warn_fallback("run_sionna_coverage", "no disabled cell matched a known twin site")
+            _warn_degraded("run_sionna_coverage", "no disabled cell matched a known twin site")
             return None
 
         dead_zones = []
@@ -700,37 +687,31 @@ class ToolRegistry:
         )
 
     def _run_cuopt(self, args: dict[str, Any]) -> ToolResult:
-        # Real path: when TWIN_URL is set (e.g. http://localhost:8011), drive the
-        # coverage twin — POST /api/optimize runs the hosted-cuOpt set-cover MILP (+ RT
-        # verify) and writes out/new_masts.geojson, which we map into candidate proposals.
-        # Unset or unreachable → the offline fixture below (keeps CI + the scripted demo
-        # hermetic). See docs/NEXT_SESSION.md.
+        # Primary: TWIN_URL set → drive the coverage twin — POST /api/optimize runs the cuOpt
+        # set-cover MILP (+ RT verify) and writes new_masts.geojson, which we map into candidate
+        # proposals. With the twin down, degrade to the REAL cuOpt plan the pipeline last wrote
+        # (new_masts.geojson). With neither, return an honest error — never invented candidates.
         exclude = set(args.get("exclude", []) or [])
         twin = os.environ.get("TWIN_URL", "").rstrip("/")
         if twin:
-            real = self._cuopt_via_twin(twin, exclude)  # warns on its own fallbacks
+            real = self._cuopt_via_twin(twin, exclude)  # warns on its own degradation
             if real is not None:
                 return real
         else:
-            _warn_fallback("run_cuopt", "TWIN_URL not set")
-        # Offline fixture: prefer the REAL cuOpt plan the pipeline wrote (new_masts.geojson) so
-        # the agent shows the genuine many-mast set, not a single invented Westminster site.
+            _warn_degraded("run_cuopt", "TWIN_URL not set")
         candidates = self._cuopt_candidates_from_artifact()
         source = "cuOpt output artifact (new_masts.geojson)"
         if not candidates:
-            _warn_fallback("run_cuopt", "new_masts.geojson absent — using scripted candidates")
-            source = "fixture"
-            # First call proposes the riverside rooftop; after a rejection, the cleaner inland one.
-            candidates = [
-                {"candidate_id": "cow-westminster-A",
-                 "label": "Riverside rooftop, Victoria Embankment",
-                 "lat": 51.5012, "lng": -0.1232,
-                 "coverage_gain_pct": 0.31, "est_cost_gbp": 84000},
-                {"candidate_id": "cow-westminster-B",
-                 "label": "Rooftop, Marsham Street",
-                 "lat": 51.4955, "lng": -0.1330,
-                 "coverage_gain_pct": 0.27, "est_cost_gbp": 78000},
-            ]
+            _warn_degraded("run_cuopt", "no twin and no new_masts.geojson artifact")
+            return ToolResult(
+                result="No cuOpt plan available — start the coverage twin (python -m src.serve) "
+                "or run the pipeline with --opt to generate one.",
+                observation={
+                    "error": "no optimiser backend",
+                    "detail": "TWIN_URL unreachable and new_masts.geojson absent",
+                    "source": "none",
+                },
+            )
         avail = [c for c in candidates if c["candidate_id"] not in exclude] or candidates
         pick = max(avail, key=lambda c: c.get("covers_holes") or 0)
         n = len(candidates)
@@ -801,8 +782,7 @@ class ToolRegistry:
 
     def _cuopt_candidates_from_artifact(self) -> list[dict[str, Any]]:
         """Build cuOpt candidates from the pipeline's real optimiser output (new_masts.geojson +
-        optimization.json) — the genuine multi-mast plan — for the offline fixture, so the agent
-        stops inventing a single Westminster site when the live twin is down."""
+        optimization.json) — the genuine multi-mast plan — used when the live twin is down."""
         from .places import load_optimization_summary, load_proposed_masts
 
         masts = load_proposed_masts()
@@ -825,8 +805,8 @@ class ToolRegistry:
 
     def _cuopt_via_twin(self, twin: str, exclude: set[str]) -> ToolResult | None:
         """Drive the real coverage-twin over HTTP and map its cuOpt proposals into the same
-        candidate shape the offline fixture returns. Returns None on any failure so the
-        caller falls back to the fixture (CI has no twin)."""
+        candidate shape the artifact path returns. Returns None on any failure so the
+        caller degrades to the pipeline artifact."""
         import httpx
 
         try:
@@ -838,7 +818,7 @@ class ToolRegistry:
                 g.raise_for_status()
                 feats = g.json().get("features", [])
         except Exception as exc:
-            _warn_fallback("run_cuopt", f"twin /api/optimize unreachable ({exc!r})")
+            _warn_degraded("run_cuopt", f"twin /api/optimize unreachable ({exc!r})")
             return None
 
         total = max(int(summary.get("coverage_holes") or len(feats)), 1)
@@ -862,7 +842,7 @@ class ToolRegistry:
                 "covers_holes": covers,
             })
         if not candidates:
-            _warn_fallback("run_cuopt", "twin returned no candidate masts")
+            _warn_degraded("run_cuopt", "twin returned no candidate masts")
             return None
 
         avail = [c for c in candidates if c["candidate_id"] not in exclude] or candidates
@@ -886,13 +866,21 @@ class ToolRegistry:
             ui_actions=self._candidates_ui(candidates, pick),
         )
 
-    # Cached EA-LiDAR backend (loaded once per run; rasters are ~16 MB each).
+    # Cached EA-LiDAR backends. The env-configured rasters (LIDAR_DSM/LIDAR_DTM) load once;
+    # otherwise tiles are auto-fetched from the EA WCS around each candidate and cached on
+    # disk (data/lidar/auto/) + in-process. Class-level so the cache survives across the
+    # per-run ToolRegistry instances.
     _lidar: Any = None
     _lidar_tried = False
+    _lidar_auto: dict[str, Any] = {}
+
+    # Candidates within the same 200 m grid cell share one auto-fetched 600 m tile, which
+    # covers validate_en's 80 m sampling radius with ample margin at the cell edges.
+    _AUTO_GRID_M = 200.0
+    _AUTO_HALF_M = 300.0
 
     def _get_lidar(self):
-        """Lazily load the LiDAR LoS backend when LIDAR_DSM/LIDAR_DTM point at real
-        rasters; returns None (→ scripted stub) if unset or unavailable."""
+        """Lazily load the env-configured LiDAR rasters (LIDAR_DSM/LIDAR_DTM), or None."""
         if self._lidar_tried:
             return self._lidar
         self._lidar_tried = True
@@ -905,49 +893,68 @@ class ToolRegistry:
                 self._lidar = None
         return self._lidar
 
+    def _get_lidar_for(self, lat: float, lng: float):
+        """A LidarLOS raster pair covering (lat, lng): the env-configured rasters when they
+        cover the point, else an EA National LiDAR Programme tile auto-fetched from the EA
+        WCS around it (cached on disk and in-process). None only when the configured rasters
+        miss AND the WCS fetch fails (offline / outside EA coverage)."""
+        from .lidar import LidarLOS, _wgs84_to_en, fetch_tiles
+
+        e, n = _wgs84_to_en(lng, lat)
+        configured = self._get_lidar()
+        if configured is not None and configured.covers(e, n):
+            return configured
+        g = self._AUTO_GRID_M
+        ce = (e // g) * g + g / 2
+        cn = (n // g) * g + g / 2
+        key = f"{ce:.0f}_{cn:.0f}"
+        if key in self._lidar_auto:
+            return self._lidar_auto[key]
+        tile_dir = _repo_root() / "data" / "lidar" / "auto"
+        dsm = tile_dir / f"dsm_{key}.tif"
+        dtm = tile_dir / f"dtm_{key}.tif"
+        los = None
+        try:
+            if not (dsm.exists() and dtm.exists()):
+                h = self._AUTO_HALF_M
+                fetch_tiles(ce - h, cn - h, ce + h, cn + h, str(dsm), str(dtm), timeout=120.0)
+            los = LidarLOS(str(dsm), str(dtm))
+        except Exception as exc:
+            _warn_degraded("validate_site", f"EA LiDAR WCS fetch failed for tile {key} ({exc!r})")
+            los = None
+        self._lidar_auto[key] = los
+        return los
+
     def _validate_site(self, args: dict[str, Any]) -> ToolResult:
-        # Real path: LIDAR_DSM/LIDAR_DTM set → genuine EA-LiDAR overshadowing check on the
-        # candidate's lat/lng. Falls back to the scripted stub when unset or when the site
-        # is outside the loaded tile (keeps CI + the offline money-shot hermetic).
-        lidar = self._get_lidar()
+        """Genuine EA-LiDAR overshadowing check on the candidate's lat/lng (DSM/DTM rasters,
+        auto-fetched from the EA WCS when not configured locally). Returns an honest 'unknown'
+        verdict when no terrain data can be obtained — never a scripted pass/fail."""
         lat, lng = args.get("lat"), args.get("lng")
-        if lidar is not None and lat is not None and lng is not None:
-            v = lidar.validate_latlng(float(lat), float(lng))
+        if lat is None or lng is None:
+            return ToolResult(
+                result="validate_site needs the candidate's lat/lng.",
+                observation={"error": "missing lat/lng",
+                             "candidate_id": args.get("candidate_id")},
+            )
+        lat, lng = float(lat), float(lng)
+        lidar = self._get_lidar_for(lat, lng)
+        if lidar is not None:
+            v = lidar.validate_latlng(lat, lng)
             if v is not None:
                 v["candidate_id"] = args.get("candidate_id")
                 return ToolResult(
                     result=f"{v['verdict'].upper()} — {v['reason']}",
                     observation={**v, "source": "EA-LiDAR (overshadowing)"},
                 )
-        # ── fallback: scripted reject→retry→accept stub (NOT a real LiDAR verdict) ──
-        if lidar is None:
-            _warn_fallback("validate_site", "LIDAR_DSM/LIDAR_DTM unset or rasters unavailable")
-        elif lat is None or lng is None:
-            _warn_fallback("validate_site", "candidate has no lat/lng to check")
-        else:
-            _warn_fallback("validate_site", "candidate outside the loaded LiDAR tile")
-        # Fail the first candidate (LoS broken by canopy), pass any subsequent one,
-        # so the agent must re-prompt cuOpt — the reject → retry → accept loop.
-        n = self.call_count("validate_site")  # already incremented in run()
-        if n == 1:
-            reason = "14 m canopy at 80 m breaks line-of-sight (DSM−DTM along path)"
-            return ToolResult(
-                result=f"FAIL — {reason}",
-                observation={
-                    "verdict": "fail",
-                    "source": "fixture",
-                    "reason": reason,
-                    "candidate_id": args.get("candidate_id"),
-                },
-            )
-        reason = "Clear line-of-sight; max obstruction 6 m, well below path clearance"
+            _warn_degraded("validate_site", "no valid terrain data at the candidate (nodata)")
         return ToolResult(
-            result=f"PASS — {reason}",
+            result="Could not validate this site — EA LiDAR terrain data is unavailable here "
+            "(offline, or the location falls outside the EA LiDAR coverage).",
             observation={
-                "verdict": "pass",
-                "source": "fixture",
-                "reason": reason,
+                "verdict": "unknown",
+                "error": "no terrain data",
                 "candidate_id": args.get("candidate_id"),
+                "source": "none",
             },
         )
 
@@ -995,18 +1002,6 @@ class ToolRegistry:
             return None
 
     @staticmethod
-    def _fixture_zones() -> list[dict[str, Any]]:
-        """Offline dead zones for the GPU-free demo: ~500 m boxes over two central-London
-        clusters that really do contain emergency-service buildings (Charing Cross and
-        Holborn police districts), so `buildings_in_zones` lights up without the twin."""
-        return [
-            {"type": "Feature", "properties": {"id": "dz-charing-cross", "severity": "critical"},
-             "geometry": _box_polygon(-0.1249, 51.5097)},
-            {"type": "Feature", "properties": {"id": "dz-holborn", "severity": "major"},
-             "geometry": _box_polygon(-0.1174, 51.5208)},
-        ]
-
-    @staticmethod
     def _summarise_buildings(affected: list[dict[str, Any]]) -> dict[str, int]:
         counts = {"police": 0, "fire": 0, "hospital": 0}
         for b in affected:
@@ -1016,7 +1011,9 @@ class ToolRegistry:
     # ── new resilience tools ────────────────────────────────────────────────────
     def _simulate_outage(self, args: dict[str, Any]) -> ToolResult:
         """Breakdown of existing mast(s) → new dead zones + the emergency-service buildings
-        inside them. Real via the twin (Sionna RT tower-down); fixture otherwise. With no
+        inside them. Primary: the twin (Sionna RT tower-down re-simulation). With the twin
+        down, the dead zones are drawn at the downed masts' real positions (masts.geojson) —
+        the hole opens where the mast stood — and labelled as an estimate. With no
         site_ids it simulates the active scenario's pre-rendered outage (never a no-op)."""
         from .emergency import buildings_in_zones, feature_centroid
 
@@ -1025,7 +1022,7 @@ class ToolRegistry:
             list(explicit) if explicit else None, args.get("scenario")
         )
         twin = self._twin_url()
-        source = "fixture"
+        source = ""
         summary: dict[str, Any] = {}
         feats: list[dict[str, Any]] = []
 
@@ -1039,14 +1036,27 @@ class ToolRegistry:
                 feats = _zones_near_sites(feats, site_ids) or _zones_for_sites(site_ids) or feats
                 source = "Sionna RT coverage twin"
 
-        if source == "fixture":
-            _warn_fallback(
+        if not source:
+            _warn_degraded(
                 "simulate_outage",
                 "TWIN_URL not set" if not twin else "twin unreachable or no site matched",
             )
-            # Draw holes where the downed masts actually stood; fall back to the central pair
-            # only if no mast position resolves (masts.geojson artifact missing).
-            feats = _zones_for_sites(site_ids) or self._fixture_zones()
+            # Draw the holes where the downed masts actually stood (real positions from
+            # masts.geojson); without even that artifact there is nothing real to show.
+            feats = _zones_for_sites(site_ids)
+            source = "downed-mast positions (masts.geojson; twin offline — zone extent estimated)"
+            if not feats:
+                return ToolResult(
+                    result="Cannot simulate the outage — the coverage twin is unreachable and "
+                    "no mast inventory (masts.geojson) is present. Start the twin "
+                    "(python -m src.serve) or run the pipeline first.",
+                    observation={
+                        "error": "no coverage backend",
+                        "disabled_cells": list(site_ids),
+                        "detail": "TWIN_URL unreachable and masts.geojson absent",
+                        "source": "none",
+                    },
+                )
 
         affected = buildings_in_zones(feats)
         counts = self._summarise_buildings(affected)
@@ -1150,17 +1160,18 @@ class ToolRegistry:
                         "source": "Sionna RT coverage twin",
                     },
                 )
-            _warn_fallback("move_mast", "twin unreachable or neither old/new mast matched")
+            _warn_degraded("move_mast", "twin unreachable or neither old/new mast matched")
         else:
-            _warn_fallback("move_mast", "TWIN_URL not set")
-        # Fixture: deterministic, no GPU.
+            _warn_degraded("move_mast", "TWIN_URL not set")
+        # A relocation IS a re-simulation — without the twin there is nothing real to report.
         return ToolResult(
-            result=f"Moved {site_id} → ({lat:.5f}, {lng:.5f}); affected tiles re-simulated "
-            "(offline estimate — set TWIN_URL for the real Sionna RT recompute)",
+            result=f"Cannot relocate {site_id} — the coverage twin is unreachable, and a move "
+            "requires a real Sionna RT re-simulation. Start it with python -m src.serve.",
             observation={
+                "error": "no coverage backend",
                 "site_id": site_id,
-                "new_position": {"lat": lat, "lng": lng},
-                "source": "fixture",
+                "requested_position": {"lat": lat, "lng": lng},
+                "source": "none",
             },
         )
 
@@ -1198,11 +1209,23 @@ class ToolRegistry:
         # outage, never scene-wide (which would strand the COW wherever the city's holes cluster).
         mast_zones = _zones_for_sites(disabled)
         holes = _zones_near_sites(twin_holes, disabled) if (twin_holes and not mast_zones) else None
-        feats = mast_zones or holes or self._fixture_zones()
+        feats = mast_zones or holes or []
         if not twin_holes:
-            _warn_fallback(
+            _warn_degraded(
                 "deploy_cow",
                 "TWIN_URL not set" if not twin else "twin returned no holes / unreachable",
+            )
+        if not feats:
+            return ToolResult(
+                result="Cannot place a Cell-on-Wheels — no dead zones are known for this "
+                "outage (the coverage twin is unreachable and no mast inventory is present). "
+                "Start the twin (python -m src.serve) or run the pipeline first.",
+                observation={
+                    "error": "no dead zones",
+                    "disabled_cells": list(disabled),
+                    "detail": "no twin holes and no masts.geojson positions",
+                    "source": "none",
+                },
             )
         depots = list(load_fire_stations())
         buildings = list(load_emergency_buildings())
@@ -1271,7 +1294,7 @@ class ToolRegistry:
                     "tiles_resimulated": res[0].get("tiles_resimulated"),
                 }
             else:
-                _warn_fallback("deploy_cow", "twin unreachable — COW hole-closure not verified")
+                _warn_degraded("deploy_cow", "twin unreachable — COW hole-closure not verified")
 
         depot = best["depot"]
         # Traffic-aware restoration ETA: how long until the COW is on-site and serving — drive
@@ -1334,7 +1357,8 @@ class ToolRegistry:
                 "restoration": eta,
                 "verified": verified,
                 "feasible": True,
-                "source": "Sionna RT coverage twin" if verified else "fixture",
+                "source": "Sionna RT coverage twin" if verified
+                else "fire-station depots + dead-zone geometry (hole closure unverified)",
             },
             ui_actions=ui,
         )
@@ -1346,7 +1370,7 @@ class ToolRegistry:
 
     def _get_starlink(self):
         """Lazily load Starlink TLEs + a shared Skyfield timescale once per run. Returns
-        (satellites, timescale), or (None, None) if skyfield/TLEs are unavailable → fixture."""
+        (satellites, timescale), or (None, None) if skyfield/TLEs are unavailable."""
         if self._starlink_tried:
             return self._starlink_sats, self._starlink_ts
         self._starlink_tried = True
@@ -1362,10 +1386,10 @@ class ToolRegistry:
         return self._starlink_sats, self._starlink_ts
 
     def _check_starlink(self, args: dict[str, Any]) -> ToolResult:
-        """Which Starlink satellite backhauls a COW at (lat, lng) — the COW has no fibre, so
-        it uplinks via satellite. Real via Skyfield + the bundled/live TLE set; a deterministic
-        fixture when skyfield or the TLEs are unavailable (keeps CI + the offline demo hermetic).
-        """
+        """Which Starlink satellite backhauls a COW at (lat, lng) RIGHT NOW — the COW has no
+        fibre, so it uplinks via satellite. Computed with Skyfield over the freshest TLE set
+        (live CelesTrak fetch → disk cache → bundled snapshot; see tle.py). Honest error when
+        the constellation can't be loaded — never an invented satellite."""
         from datetime import UTC, datetime
 
         lat, lng = args.get("lat"), args.get("lng")
@@ -1378,48 +1402,59 @@ class ToolRegistry:
                 observation={"error": "no lat/lng and no prior COW"},
             )
         lat, lng = float(lat), float(lng)
-        # Pin to a fixed instant near the bundled TLE snapshot's epoch so visibility is
-        # deterministic — TLEs go stale, so computing against "now" with an old snapshot drifts.
-        when = datetime(2026, 6, 6, 12, 0, 0, tzinfo=UTC)
+        when = datetime.now(UTC)
 
         sats, ts = self._get_starlink()
         if not sats:
-            _warn_fallback("check_starlink", "skyfield/Starlink TLEs unavailable")
-        else:
-            view = None
-            try:
-                from .starlink import best_satellite
-                view = best_satellite(lat, lng, when, tles=sats, ts=ts)
-            except Exception as exc:
-                _warn_fallback("check_starlink", f"visibility compute failed ({exc!r})")
-            else:
-                if view is None:
-                    _warn_fallback("check_starlink", "no Starlink satellite above elevation mask")
-            if view is not None:
-                return ToolResult(
-                    result=f"COW backhaul: {view.name} at {view.elevation_deg:.0f}° elevation, "
-                    f"{view.slant_range_km:.0f} km slant range",
-                    observation={
-                        "satellite": view.name,
-                        "norad_id": view.norad_id,
-                        "elevation_deg": round(view.elevation_deg, 1),
-                        "azimuth_deg": round(view.azimuth_deg, 1),
-                        "slant_range_km": round(view.slant_range_km, 1),
-                        "altitude_km": round(view.altitude_km, 1),
-                        "cow_position": {"lat": lat, "lng": lng},
-                        "source": "Skyfield (Starlink TLEs)",
-                    },
-                )
-        # Fixture: a deterministic satellite so the skyfield-free demo still tells the story.
+            _warn_degraded("check_starlink", "skyfield/Starlink TLEs unavailable")
+            return ToolResult(
+                result="Cannot compute Starlink visibility — the TLE constellation could not "
+                "be loaded (skyfield missing or no TLE source reachable).",
+                observation={
+                    "error": "no TLE constellation",
+                    "cow_position": {"lat": lat, "lng": lng},
+                    "source": "none",
+                },
+            )
+        try:
+            from .starlink import best_satellite
+            view = best_satellite(lat, lng, when, tles=sats, ts=ts)
+        except Exception as exc:
+            _warn_degraded("check_starlink", f"visibility compute failed ({exc!r})")
+            return ToolResult(
+                result=f"Starlink visibility computation failed: {exc}",
+                observation={
+                    "error": "visibility compute failed",
+                    "detail": repr(exc),
+                    "cow_position": {"lat": lat, "lng": lng},
+                    "source": "none",
+                },
+            )
+        if view is None:
+            return ToolResult(
+                result="No Starlink satellite is above the 25° elevation mask at this "
+                "location right now — the next pass is minutes away (Starlink revisit is "
+                "near-continuous over London).",
+                observation={
+                    "satellite": None,
+                    "cow_position": {"lat": lat, "lng": lng},
+                    "checked_at_utc": when.isoformat(timespec="seconds"),
+                    "source": "Skyfield (Starlink TLEs)",
+                },
+            )
         return ToolResult(
-            result="COW backhaul: STARLINK-1234 at 52° elevation, 587 km slant range "
-            "(offline estimate — install skyfield for the real visibility computation)",
+            result=f"COW backhaul: {view.name} at {view.elevation_deg:.0f}° elevation, "
+            f"{view.slant_range_km:.0f} km slant range",
             observation={
-                "satellite": "STARLINK-1234",
-                "elevation_deg": 52.0,
-                "slant_range_km": 587.0,
+                "satellite": view.name,
+                "norad_id": view.norad_id,
+                "elevation_deg": round(view.elevation_deg, 1),
+                "azimuth_deg": round(view.azimuth_deg, 1),
+                "slant_range_km": round(view.slant_range_km, 1),
+                "altitude_km": round(view.altitude_km, 1),
                 "cow_position": {"lat": lat, "lng": lng},
-                "source": "fixture",
+                "checked_at_utc": when.isoformat(timespec="seconds"),
+                "source": "Skyfield (Starlink TLEs)",
             },
         )
 
@@ -1449,7 +1484,7 @@ class ToolRegistry:
 
         pool = [b for b in load_emergency_buildings() if b["kind"] == kind]
         if not pool:
-            _warn_fallback("find_nearest", f"no {kind} buildings loaded")
+            _warn_degraded("find_nearest", f"no {kind} buildings loaded")
             return ToolResult(
                 result=f"No {kind} buildings are loaded.",
                 observation={"error": "no data", "kind": kind},
@@ -1669,7 +1704,7 @@ class ToolRegistry:
         from .places import load_masts, mast_by_id, nearby_masts, resolve_place
 
         if not load_masts():
-            _warn_fallback("find_masts", "masts.geojson not present (pipeline output missing)")
+            _warn_degraded("find_masts", "masts.geojson not present (pipeline output missing)")
             return ToolResult(
                 result="No mast data is loaded yet — run the coverage pipeline first.",
                 observation={"error": "no masts", "source": "none"},

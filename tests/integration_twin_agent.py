@@ -19,7 +19,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 os.environ.setdefault("TWIN_URL", f"http://127.0.0.1:{PORT}")
 os.environ.setdefault("NEMORAY_NO_WARMUP", "1")   # we warm explicitly below
 
-from src.serve import Handler                       # noqa: E402
+from src.serve import Handler  # noqa: E402
 
 
 def _serve():
@@ -54,16 +54,16 @@ def main() -> int:
     print(f"    depot={station}  cow={r.observation.get('cow')}")
     ok &= "Fire Station" in (station or "")
 
-    print("\n[3] check_starlink at the COW position — expect a satellite (real or fixture)")
+    print("\n[3] check_starlink at the COW position — expect a live Skyfield answer")
     r = reg.run("check_starlink", {})
     print(f"    {r.result}")
-    ok &= bool(r.observation.get("satellite"))
+    ok &= r.observation.get("source") == "Skyfield (Starlink TLEs)"
 
     print("\n[4] move_mast — expect twin re-sim of the relocated mast")
     t0 = time.time()
     r = reg.run("move_mast", {"site_id": "TQ3461880911", "new_lat": 51.515, "new_lng": -0.075})
     print(f"    {time.time()-t0:.1f}s  {r.result}")
-    ok &= r.observation.get("source") in ("Sionna RT coverage twin", "fixture")
+    ok &= r.observation.get("source") == "Sionna RT coverage twin"
 
     print(f"\n=== integration {'PASS' if ok else 'FAIL'} ===")
     return 0 if ok else 1
