@@ -24,8 +24,10 @@ echo "==> Coverage solve: --subset westminster_canary"
 if [ "${1:-}" = "--opt" ]; then
   # cuOpt needs an API key (hosted MILP service). optimize.py reads CUOPT_API_KEY.
   [ -n "${CUOPT_API_KEY:-}" ] || echo "WARN: CUOPT_API_KEY unset — optimise will fail." >&2
-  echo "==> cuOpt mast placement"; "$PY" -m src.optimize
-  echo "==> RT verification";      "$PY" -m src.verify
+  # Closed loop: cuOpt proposes -> Sionna RT verifies -> residual holes re-optimise,
+  # until the plan serves 100% of the outdoor holes (src.optimize runs verify itself).
+  echo "==> cuOpt mast placement + RT verification (closed loop)"
+  "$PY" -m src.optimize
 fi
 
 echo "==> Artifacts written to nemoray/public/raytracing/ — see summary.json:"

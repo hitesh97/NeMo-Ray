@@ -298,6 +298,8 @@ interface SceneData {
   markers: Marker[];
   holes: Hole[];
   bounds: Bounds | null;
+  /** coverage.png URL — cache-busted when the twin re-exports the raster. */
+  coverageUrl: string;
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -744,7 +746,7 @@ function buildStaticLayers(data: SceneData, vis: LayerVis): LayersList {
     L.push(
       new BitmapLayer({
         id: "coverage",
-        image: `${DATA}/coverage.png`,
+        image: data.coverageUrl,
         bounds: [data.bounds.west, data.bounds.south, data.bounds.east, data.bounds.north],
         visible: vis.coverage.visible,
         opacity: vis.coverage.opacity,
@@ -1600,6 +1602,7 @@ export function DeckScene({
   cameraCommand = null,
   referencedSiteIds = EMPTY_REF_IDS,
   deactivatedSiteIds = EMPTY_REF_IDS,
+  artifactsNonce = 0,
   onPickMast,
 }: {
   layers: LayerVis;
@@ -1609,6 +1612,8 @@ export function DeckScene({
   referencedSiteIds?: string[];
   /** Mast ids that are offline (outage): their beacon turns red and their rays are dropped. */
   deactivatedSiteIds?: string[];
+  /** Bumped when the twin rewrites the ray-tracing artifacts — re-fetch rays/masts/holes. */
+  artifactsNonce?: number;
   /** Called with a mast id when the operator clicks an antenna on the map. */
   onPickMast?: (id: string) => void;
 }) {
@@ -1617,6 +1622,9 @@ export function DeckScene({
   // latest layer states through this ref so toggles take effect without remounting the map.
   // Synced from props in its own effect (refs must not be written during render).
   const layersRef = useRef(layers);
+  // Re-fetches the twin's dynamic artifacts (rays / proposed masts / holes / coverage)
+  // and rebuilds the layers — installed by the map effect, driven by `artifactsNonce`.
+  const refreshArtifactsRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     layersRef.current = layers;
   }, [layers]);
@@ -1825,6 +1833,7 @@ export function DeckScene({
         markers: matchServiceBuildings(buildings, emergency, bounds),
         holes: toHoles(holesFC),
         bounds,
+        coverageUrl: `${DATA}/coverage.png`,
       };
 
       // Static layers are rebuilt only when a layer toggle/opacity changes (tracked by
@@ -1853,6 +1862,30 @@ export function DeckScene({
           ? data.trips.filter((t) => !downedKeys.has(t.originKey))
           : data.trips;
       };
+
+      // Re-fetch the artifacts a Sionna re-simulation rewrites (master rays, proposed
+      // masts, residual holes, the coverage raster) and rebuild the affected layers in
+      // place — so the rays "come back" right after every simulate/optimise tool run,
+      // including the rays traced out of newly proposed masts. Static inputs (buildings,
+      // gazetteer, emergency services) never change per run and are not re-fetched.
+      const refreshArtifacts = async () => {
+        const v = Date.now();
+        const [raysFC2, newFC2, holesFC2] = await Promise.all([
+          fetchJSON(`${DATA}/paths.geojson?v=${v}`).catch(() => null) as Promise<FC<RayFeature> | null>,
+          fetchJSON(`${DATA}/new_masts.geojson?v=${v}`).catch(() => null) as Promise<FC<MastFeature> | null>,
+          fetchJSON(`${DATA}/hotspots.geojson?v=${v}`).catch(() => null) as Promise<HoleFC | null>,
+        ]);
+        if (cancelled) return;
+        if (raysFC2) data.trips = toTrips(raysFC2);
+        if (newFC2) data.newMasts = toMasts(newFC2, bounds, true);
+        if (holesFC2) data.holes = toHoles(holesFC2);
+        data.coverageUrl = `${DATA}/coverage.png?v=${v}`;
+        liveTrips = data.trips;
+        lastDownedSig = "\u0000stale"; // force the downed-ray filter to recompute next frame
+        staticLayers = buildStaticLayers(data, layersRef.current);
+        lastSig = staticSig(layersRef.current);
+      };
+      refreshArtifactsRef.current = () => void refreshArtifacts();
 
       // The decluttered place-label set is recomputed only when the viewport actually moves
       // (zoom/pan/rotate), then reused across frames so the per-frame rebuild hands deck.gl a
@@ -1953,6 +1986,7 @@ export function DeckScene({
 
     return () => {
       cancelled = true;
+      refreshArtifactsRef.current = null;
       cancelAnimationFrame(raf);
       clearInterval(satInterval);
       if (overlay) overlay.finalize();
@@ -1960,6 +1994,12 @@ export function DeckScene({
       mapRef.current = null;
     };
   }, []);
+
+  // A coverage-mutating agent tool succeeded — the twin rewrote the artifacts on disk,
+  // so pull the fresh rays / proposed masts / holes / coverage raster into the scene.
+  useEffect(() => {
+    if (artifactsNonce > 0) refreshArtifactsRef.current?.();
+  }, [artifactsNonce]);
 
   return <div ref={containerRef} className="absolute inset-0 h-full w-full" />;
 }

@@ -18,7 +18,7 @@ import time
 
 from . import export
 from . import rt as RT
-from .geo import lnglat_to_en
+from .geo import en_to_lnglat, lnglat_to_en
 from .gpu import GpuMonitor, perf_summary
 from .masts import Site, load_sites
 from .mosaic import Mosaic
@@ -125,7 +125,9 @@ def _resim_sig(disabled_ids, added, trace_rays) -> str:
 
 
 def _resim_artifact_names(trace_rays) -> tuple[str, ...]:
-    return _RESIM_ARTIFACTS + (("new_rays.geojson",) if trace_rays else ())
+    # paths.geojson is surgically rewritten when rays are re-traced (update_master_rays),
+    # so it must be captured/restored with the rest for the memoised re-sim to stay true.
+    return _RESIM_ARTIFACTS + (("new_rays.geojson", "paths.geojson") if trace_rays else ())
 
 
 def _capture_artifacts(cfg, trace_rays) -> dict[str, bytes]:
@@ -228,6 +230,15 @@ def _resimulate_uncached(cfg, disabled_ids=None, added=None, trace_rays=False) -
 
     if trace_rays:
         _write_rays(cfg, ray_dicts, "new_rays.geojson")
+        # Keep the master paths.geojson truthful: swap the re-solved tiles' rays for the
+        # fresh trace so the HUD's ray layer reflects this network state after a refresh.
+        boxes = []
+        for tile, _cache in tiles:
+            if tile.key in affected_keys:
+                w, s_ = en_to_lnglat(tile.e0 - half, tile.n0 - half)
+                e_, n_ = en_to_lnglat(tile.e0 + half, tile.n0 + half)
+                boxes.append((w, s_, e_, n_))
+        export.update_master_rays(cfg, ray_dicts, drop_origin_boxes=boxes)
 
     perf = perf_summary(monitor, latencies, time.time() - t0)
     _write_perf(cfg, perf)

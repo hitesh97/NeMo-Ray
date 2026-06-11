@@ -126,12 +126,12 @@ class Handler(SimpleHTTPRequestHandler):
         return R.trace_all_rays(cfg, disabled_ids=disabled, added=added)
 
     def _run_optimize(self):
+        # Closed loop: cuOpt proposes, Sionna RT verifies, residual holes re-optimise —
+        # so the returned plan actually serves 100% of the outdoor holes under real
+        # ray-traced propagation (optimize_to_target), not just the planner's circles.
         from . import optimize as optimizer
         cfg = load_config()
-        result = optimizer.optimize(cfg)
-        if result.get("new_masts", 0) > 0:
-            from . import verify as verifier  # lazy: pulls in Sionna RT (GPU)
-            result.update(verifier.verify(cfg))
+        result = optimizer.optimize_to_target(cfg)
         meta = history.snapshot(cfg, f"cuOpt: +{result.get('new_masts', 0)} masts",
                                 extra={"served_pct": result.get("served_pct_after")})
         result["state_id"] = meta["id"]

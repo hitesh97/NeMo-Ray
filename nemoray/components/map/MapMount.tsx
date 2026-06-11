@@ -17,6 +17,7 @@ export function MapMount() {
   const directives = useNemoStore((s) => s.agentMap);
   const cameraCommand = useNemoStore((s) => s.cameraCommand);
   const referencedSiteIds = useNemoStore((s) => s.referencedSiteIds);
+  const artifactsNonce = useNemoStore((s) => s.artifactsNonce);
   const deactivatedSiteIds = useNemoStore((s) => s.deactivatedSiteIds);
   const toggleReferencedSite = useNemoStore((s) => s.toggleReferencedSite);
   return (
@@ -25,6 +26,7 @@ export function MapMount() {
       directives={directives}
       cameraCommand={cameraCommand}
       referencedSiteIds={referencedSiteIds}
+      artifactsNonce={artifactsNonce}
       deactivatedSiteIds={deactivatedSiteIds}
       onPickMast={toggleReferencedSite}
     />

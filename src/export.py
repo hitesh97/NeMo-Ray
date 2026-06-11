@@ -170,6 +170,47 @@ def export_buildings(cfg, buildings, mosaic):
     return len(feats)
 
 
+def update_master_rays(cfg, new_ray_dicts, drop_origin_boxes=None, drop_operator=None):
+    """Refresh the master paths.geojson (the HUD's single ray source) after a PARTIAL ray
+    re-trace: drop the existing features that the re-trace supersedes — those whose endpoints
+    sit inside one of `drop_origin_boxes` ([w, s, e, n] WGS84; the re-solved tile cores) or
+    whose operator equals `drop_operator` (e.g. "EE-new" for proposed masts) — then append
+    the re-traced rays. Surgical, so a tower-down or new-mast re-sim updates exactly the
+    affected rays without re-tracing (or duplicating) the rest of the scene."""
+    path = os.path.join(cfg["paths"]["out_dir"], "paths.geojson")
+    feats = []
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                feats = json.load(f).get("features", [])
+        except (OSError, ValueError):
+            feats = []
+    boxes = list(drop_origin_boxes or [])
+
+    def _in_box(pt):
+        return any(w <= pt[0] <= e and s <= pt[1] <= n for (w, s, e, n) in boxes)
+
+    def _keep(ft):
+        if drop_operator and (ft.get("properties") or {}).get("operator") == drop_operator:
+            return False
+        if boxes:
+            coords = (ft.get("geometry") or {}).get("coordinates") or []
+            if coords and (_in_box(coords[0]) or _in_box(coords[-1])):
+                return False
+        return True
+
+    feats = [ft for ft in feats if _keep(ft)]
+    feats.extend(
+        {"type": "Feature",
+         "geometry": {"type": "LineString", "coordinates": r["coords"]},
+         "properties": {"operator": r["operator"], "bounces": r["bounces"]}}
+        for r in new_ray_dicts
+    )
+    with open(path, "w") as f:
+        json.dump({"type": "FeatureCollection", "features": feats}, f)
+    return len(feats)
+
+
 def _write_fc(path, features):
     with open(path, "w") as f:
         json.dump({"type": "FeatureCollection", "features": features}, f)

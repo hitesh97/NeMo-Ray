@@ -257,9 +257,88 @@ def _write_empty(cfg):
                    "solver": "NVIDIA cuOpt (hosted MILP)"}, f, indent=2)
 
 
+def optimize_to_target(cfg, max_rounds: int | None = None) -> dict:
+    """Closed-loop optimise → RT-verify → re-optimise until the proposed masts ACTUALLY
+    serve every outdoor hole under ray-traced propagation (not just the planner's coverage
+    circles), or `max_rounds` is hit.
+
+    Each round: cuOpt proposes masts for the current hotspots; the accumulated plan is
+    re-simulated with Sionna RT (verify — which also re-traces the proposed masts' rays
+    into paths.geojson and rewrites hotspots.geojson to the residual holes); any holes the
+    physics says are still unserved feed the next round. Terminates when optimize() finds
+    no outdoor holes left — i.e. 100% of serviceable demand is covered by real simulation.
+    """
+    if max_rounds is None:
+        max_rounds = int(cfg["cuopt"].get("max_rounds", 3))
+    out = cfg["paths"]["out_dir"]
+    masts_path = os.path.join(out, "new_masts.geojson")
+
+    total_feats: list[dict] = []
+    last_opt: dict = {}
+    verification: dict = {}
+    rounds_run = 0
+    for rnd in range(1, max_rounds + 1):
+        print(f"\n=== Optimisation round {rnd}/{max_rounds} ===")
+        last_opt = optimize(cfg)
+        if last_opt.get("new_masts", 0) == 0:
+            # No outdoor holes remain — the accumulated plan hits the 100% target.
+            break
+        rounds_run = rnd
+        with open(masts_path) as f:
+            feats = json.load(f)["features"]
+        for k, ft in enumerate(feats):  # unique ids across rounds for the HUD markers
+            ft["properties"]["id"] = f"new-r{rnd}-{k}"
+        total_feats.extend(feats)
+        with open(masts_path, "w") as f:
+            json.dump({"type": "FeatureCollection", "features": total_feats}, f)
+
+        from . import verify as verifier  # lazy: pulls in Sionna RT (GPU)
+        verification = verifier.verify(cfg)
+        print(f"  round {rnd}: plan {len(total_feats)} mast(s) → "
+              f"{verification.get('coverage_of_serviceable_holes_pct')}% of serviceable "
+              f"former holes served, {verification.get('remaining_hotspots')} hotspot(s) "
+              "remain after RT re-simulation")
+
+    # A trailing zero-hole optimize() wipes new_masts.geojson via _write_empty — restore
+    # the accumulated plan so the artifact always carries the full verified mast set.
+    if total_feats:
+        with open(masts_path, "w") as f:
+            json.dump({"type": "FeatureCollection", "features": total_feats}, f)
+
+    target_met = last_opt.get("new_masts", 0) == 0 and bool(total_feats)
+    summary = {
+        **last_opt,
+        "new_masts": len(total_feats),
+        "rounds": rounds_run,
+        "target_met": target_met or last_opt.get("coverage_holes", 0) == 0,
+        **{k: verification[k] for k in
+           ("coverage_of_serviceable_holes_pct", "serviceable_holes",
+            "serviceable_holes_now_served", "remaining_hotspots", "served_pct_after")
+           if k in verification},
+        "verified": bool(verification),
+    }
+    with open(os.path.join(out, "optimization.json"), "w") as f:
+        json.dump(summary, f, indent=2)
+    print("\n=== Closed-loop optimisation summary ===")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+    return summary
+
+
 def main():
+    import argparse
+
+    ap = argparse.ArgumentParser(description="cuOpt mast placement (closed-loop, RT-verified)")
+    ap.add_argument("--single", action="store_true",
+                    help="one cuOpt solve only — no RT verification loop")
+    ap.add_argument("--rounds", type=int, default=None,
+                    help="max optimise→verify rounds (default: cuopt.max_rounds, 3)")
+    args = ap.parse_args()
     cfg = load_config()
-    optimize(cfg)
+    if args.single:
+        optimize(cfg)
+    else:
+        optimize_to_target(cfg, max_rounds=args.rounds)
 
 
 if __name__ == "__main__":

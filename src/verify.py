@@ -197,14 +197,10 @@ def _append_rays(cfg, new_ray_dicts):
     # Standalone file for the viewer to add without rebuilding the whole ray layer.
     with open(os.path.join(out, "new_rays.geojson"), "w") as f:
         json.dump({"type": "FeatureCollection", "features": feats}, f)
-    # Also append to the master paths.geojson so a full reload stays consistent.
-    path = os.path.join(out, "paths.geojson")
-    if os.path.exists(path) and feats:
-        with open(path) as f:
-            fc = json.load(f)
-        fc["features"].extend(feats)
-        with open(path, "w") as f:
-            json.dump(fc, f)
+    # Master file: drop any previous proposed-mast rays (operator EE-new) before appending
+    # the fresh trace, so repeated verifies (optimise rounds) never duplicate rays.
+    if feats:
+        export.update_master_rays(cfg, new_ray_dicts, drop_operator="EE-new")
 
 
 def main():

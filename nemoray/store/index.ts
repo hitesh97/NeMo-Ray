@@ -106,6 +106,12 @@ interface NemoState {
   agentMap: AgentMapState;
   applyMapAction(a: MapAction): void;
   clearAgentMap(): void;
+  /**
+   * Bumped whenever a coverage-mutating agent tool succeeds (simulate_outage, move_mast,
+   * deploy_cow, run_cuopt, run_sionna_coverage) — the twin has rewritten the ray-tracing
+   * artifacts (paths/new_masts/hotspots/coverage), so the map re-fetches them.
+   */
+  artifactsNonce: number;
 
   // ── voice ──
   voiceAvailable: boolean;
@@ -163,6 +169,15 @@ const EMPTY_NEMOTRON: NemotronTelemetry = {
 };
 
 // ── agent-driven map highlights ──
+/** Tools whose success means the twin rewrote the on-disk ray-tracing artifacts. */
+const COVERAGE_TOOLS = new Set([
+  "simulate_outage",
+  "move_mast",
+  "deploy_cow",
+  "run_cuopt",
+  "run_sionna_coverage",
+]);
+
 const EMPTY_AGENT_MAP: AgentMapState = {
   zones: [],
   markers: [],
@@ -476,6 +491,15 @@ export const useNemoStore = create<NemoState>((set, get) => ({
             const proposals = proposalsFromCuopt(e.patch.data);
             if (proposals) next.proposals = proposals;
           }
+          // A coverage-mutating tool just finished: the twin rewrote the artifacts
+          // (paths/new_masts/hotspots/coverage.png), so nudge the map to re-fetch them.
+          if (
+            e.patch.status === "success" &&
+            tool &&
+            COVERAGE_TOOLS.has(tool.name)
+          ) {
+            next.artifactsNonce = st.artifactsNonce + 1;
+          }
           return next;
         }
         case "map_action":
@@ -532,6 +556,7 @@ export const useNemoStore = create<NemoState>((set, get) => ({
 
   // ── agent-driven map highlights ──
   agentMap: EMPTY_AGENT_MAP,
+  artifactsNonce: 0,
   applyMapAction: (a) => set((st) => ({ agentMap: reduceAgentMap(st.agentMap, a) })),
   clearAgentMap: () => set({ agentMap: EMPTY_AGENT_MAP }),
 
