@@ -89,7 +89,6 @@ def main() -> int:  # noqa: PLR0915 — a linear test script
     check("1 no errors", not r["errors"], str(r["errors"]))
     check("1 answers in prose", len(r["final"]) > 80, f"{r['secs']}s · {r['final'][:70]}…")
     check("1 fires no tools", r["tools"] == [], str(r["tools"]))
-    hist = turn_pair("What is this system and what can you do for me?", r["final"])
 
     print("\n━━ 2. knowledge graph — nearest service to a landmark")
     r = run_turn("Where is the nearest fire station to the Shard?")
