@@ -7,7 +7,6 @@ import os
 
 import numpy as np
 
-from .geo import en_to_lnglat
 from .rt import NODATA
 
 
@@ -97,8 +96,8 @@ def export_all(cfg, mosaic, sites, rays, n_buildings=0, performance=None, buildi
 
 def export_coverage(cfg, mosaic):
     """Write the coverage heatmap PNG (WGS84) + bounds. Returns (west, south, east, north)."""
-    from rasterio.enums import Resampling
     from PIL import Image
+    from rasterio.enums import Resampling
 
     out = cfg["paths"]["out_dir"]
     os.makedirs(out, exist_ok=True)
@@ -148,6 +147,7 @@ def export_buildings(cfg, buildings, mosaic):
     """Write the OSM building footprints within the simulated area to GeoJSON (WGS84)
     with a `height` property, for the viewer to extrude as an untextured 3D city model."""
     import shapely.geometry as sg
+
     from .osm import buildings_in
 
     out = cfg["paths"]["out_dir"]

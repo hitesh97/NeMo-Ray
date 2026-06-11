@@ -130,7 +130,7 @@ class Handler(SimpleHTTPRequestHandler):
         cfg = load_config()
         result = optimizer.optimize(cfg)
         if result.get("new_masts", 0) > 0:
-            from . import verify as verifier   # lazy: pulls in Sionna RT (GPU)
+            from . import verify as verifier  # lazy: pulls in Sionna RT (GPU)
             result.update(verifier.verify(cfg))
         meta = history.snapshot(cfg, f"cuOpt: +{result.get('new_masts', 0)} masts",
                                 extra={"served_pct": result.get("served_pct_after")})

@@ -72,8 +72,8 @@ class Mosaic:
 
     def hotspots(self, served_threshold: float):
         """Low-coverage polygons in EPSG:27700, as a list of (geometry, props)."""
-        from rasterio import features
         import shapely.geometry as sg
+        from rasterio import features
 
         low = self.mask & (self.dbm < served_threshold)
         if not low.any():

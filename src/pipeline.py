@@ -20,9 +20,9 @@ import numpy as np
 
 from . import rt as RT
 from .config import load_config
-from .gpu import GpuMonitor, device_name
 from .export import export_all, export_buildings
 from .geo import Tile, grid_for_bbox, tiles_for_subset
+from .gpu import GpuMonitor, device_name
 from .masts import load_sites, sites_near
 from .mosaic import Mosaic
 from .osm import load_buildings

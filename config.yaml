@@ -84,7 +84,7 @@ focus_tile: [51.5074, -0.1278]
 
 # Paths
 paths:
-  csv: SITEFINDER_MAY_2012.csv
+  csv: data/SITEFINDER_MAY_2012.csv
   data_dir: data
   # The pipeline publishes its web artifacts (coverage.png, paths/hotspots/new_*
   # GeoJSON, summary.json) straight into the Next.js dashboard's static dir, which

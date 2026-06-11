@@ -10,15 +10,15 @@ After `src.optimize` writes `out/new_masts.geojson`, this:
 """
 from __future__ import annotations
 
-import glob
 import json
 import os
 
 import numpy as np
 
-from . import export, rt as RT
+from . import export
+from . import rt as RT
 from .config import load_config
-from .geo import Tile, en_to_lnglat, lnglat_to_en
+from .geo import Tile, lnglat_to_en
 from .masts import Site, load_sites
 from .mosaic import Mosaic
 from .osm import load_buildings
@@ -108,6 +108,7 @@ def verify(cfg) -> dict:
 
     # Re-solve the affected tiles; keep cached results for the rest.
     import time
+
     from .gpu import GpuMonitor, perf_summary
     monitor = GpuMonitor().start()
     t0 = time.time()

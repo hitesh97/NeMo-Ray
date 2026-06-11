@@ -10,9 +10,7 @@ import numpy as np
 
 # Sionna RT picks a Mitsuba variant on import; cuda_ad_* is selected automatically when a
 # GPU is present. Importing here keeps the heavy import out of the lightweight modules.
-import sionna.rt as rt
-from sionna.rt import (PathSolver, PlanarArray, RadioMapSolver, Receiver,
-                       Transmitter, load_scene)
+from sionna.rt import PathSolver, PlanarArray, RadioMapSolver, Receiver, Transmitter, load_scene
 
 from .geo import Tile
 from .masts import Site, sites_near
