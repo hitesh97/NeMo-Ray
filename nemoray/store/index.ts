@@ -176,6 +176,7 @@ const COVERAGE_TOOLS = new Set([
   "deploy_cow",
   "run_cuopt",
   "run_sionna_coverage",
+  "clear_proposals",
 ]);
 
 const EMPTY_AGENT_MAP: AgentMapState = {
@@ -490,6 +491,10 @@ export const useNemoStore = create<NemoState>((set, get) => ({
           if (tool?.name === "run_cuopt" && e.patch.data) {
             const proposals = proposalsFromCuopt(e.patch.data);
             if (proposals) next.proposals = proposals;
+          }
+          // Clearing the plan empties the Optimiser panel along with the map artifacts.
+          if (tool?.name === "clear_proposals" && e.patch.status === "success") {
+            next.proposals = [];
           }
           // A coverage-mutating tool just finished: the twin rewrote the artifacts
           // (paths/new_masts/hotspots/coverage.png), so nudge the map to re-fetch them.

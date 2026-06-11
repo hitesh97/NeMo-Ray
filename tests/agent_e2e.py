@@ -176,10 +176,18 @@ def main() -> int:  # noqa: PLR0915 — a linear test script
     mv = r["results"].get("move_mast", "")
     check("12 twin re-simulated", "Sionna" in mv, mv[:80])
 
-    print("\n━━ 13. graceful miss — unknown place")
-    r = run_turn("Fly to Hogwarts School of Witchcraft please")
+    print("\n━━ 13. clear proposals — remove the cuOpt plan")
+    r = run_turn("Remove all the proposed masts")
     check("13 no errors", not r["errors"], str(r["errors"]))
-    check("13 honest miss", len(r["final"]) > 20, r["final"][:90])
+    check("13 clear_proposals fired", "clear_proposals" in r["tools"], str(r["tools"]))
+    check("13 confirms removal", "remov" in r["final"].lower() or "clear" in r["final"].lower(),
+          r["final"][:90])
+    check("13 cleared the overlay", "clear" in r["ops"], str(r["ops"]))
+
+    print("\n━━ 14. graceful miss — unknown place")
+    r = run_turn("Fly to Hogwarts School of Witchcraft please")
+    check("14 no errors", not r["errors"], str(r["errors"]))
+    check("14 honest miss", len(r["final"]) > 20, r["final"][:90])
 
     print(f"\n━━ RESULT: {len(PASS)} passed, {len(FAIL)} failed")
     if FAIL:

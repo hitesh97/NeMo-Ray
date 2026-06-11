@@ -96,6 +96,10 @@ def ensure_baseline(cfg) -> None:
 
 
 def _prune(cfg, cap: int) -> None:
+    """Drop the oldest states beyond `cap` — but NEVER the baseline, which must always
+    remain restorable (clear_proposals reverts to it)."""
     states = list_states(cfg)
-    for s in states[:-cap] if len(states) > cap else []:
+    prunable = [s for s in states if s.get("label") != "baseline"]
+    excess = len(states) - cap
+    for s in prunable[:excess] if excess > 0 else []:
         shutil.rmtree(os.path.join(_hdir(cfg), s["id"]), ignore_errors=True)

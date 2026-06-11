@@ -228,6 +228,7 @@ TOOL_LABELS: dict[str, str] = {
     "nearby_places": "Scan Surroundings",
     "describe_network": "Network Overview",
     "find_masts": "Find Masts",
+    "clear_proposals": "Clear Proposed Masts",
 }
 
 
@@ -572,6 +573,16 @@ class ToolRegistry:
                 "required": [],
             },
             self._find_masts,
+        )
+        self._add(
+            "clear_proposals",
+            "Remove ALL proposed masts (the cuOpt plan) and their rays from the map and "
+            "restore the baseline network state. Use when the operator says 'remove the "
+            "proposed masts', 'clear the plan', 'reject the proposals', 'reset', or "
+            "'start over'. This reverts the optimisation only — the real mast network is "
+            "untouched.",
+            {"type": "object", "properties": {}, "required": []},
+            self._clear_proposals,
         )
 
     def _add(
@@ -1803,4 +1814,43 @@ class ToolRegistry:
                 "source": "masts.geojson",
             },
             ui_actions=ui,
+        )
+
+    def _clear_proposals(self, args: dict[str, Any]) -> ToolResult:
+        """Wipe the cuOpt plan: the twin restores its baseline artifacts and strips the
+        proposed masts' rays from the master ray file; the HUD re-fetches and the gold
+        towers disappear. Honest error when the twin is unreachable."""
+        import httpx
+
+        twin = self._twin_url()
+        if not twin:
+            _warn_degraded("clear_proposals", "TWIN_URL not set")
+            return ToolResult(
+                result="Cannot clear the proposals — the coverage twin is unreachable "
+                "(it owns the plan artifacts). Start it with python -m src.serve.",
+                observation={"error": "no coverage backend", "source": "none"},
+            )
+        try:
+            with httpx.Client(base_url=twin, timeout=120.0) as client:
+                r = client.post("/api/clear_proposals")
+                r.raise_for_status()
+                summary = r.json()
+        except Exception as exc:
+            _warn_degraded("clear_proposals", f"twin /api/clear_proposals failed ({exc!r})")
+            return ToolResult(
+                result=f"Clearing the proposals failed: {exc}",
+                observation={"error": "clear failed", "detail": repr(exc), "source": "none"},
+            )
+        restored = summary.get("restored_state") or {}
+        served = restored.get("served_pct")
+        tail = f" Baseline coverage restored ({served}% served)." if served is not None else ""
+        return ToolResult(
+            result=f"All proposed masts and their rays removed.{tail}",
+            observation={
+                "cleared": True,
+                "restored_state": restored.get("label"),
+                "served_pct": served,
+                "source": "coverage twin (baseline restore)",
+            },
+            ui_actions=[{"op": "clear"}],
         )

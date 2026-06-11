@@ -3,6 +3,7 @@
 import {
   Check,
   Cpu,
+  Eraser,
   Gauge,
   MapPin,
   Navigation,
@@ -34,6 +35,7 @@ const ICON: Record<ToolName, LucideIcon> = {
   nearby_places: Radar,
   describe_network: Gauge,
   find_masts: RadioTower,
+  clear_proposals: Eraser,
 };
 
 const STATUS_TEXT: Record<ToolStatus, string> = {

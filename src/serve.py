@@ -174,6 +174,32 @@ class Handler(SimpleHTTPRequestHandler):
                                  "coordinates": [[f_lng, f_lat], [t_lng, t_lat]]},
                     "distance_m": None, "duration_s": None, "source": "straight"}
 
+    def _run_clear_proposals(self):
+        """Remove the cuOpt plan: restore the baseline artifacts (coverage, hotspots,
+        new_masts, …) and strip the proposed masts' rays (operator EE-new) from the master
+        paths.geojson — which history snapshots deliberately exclude. The cleared state is
+        snapshotted so it can itself be reverted."""
+        from . import export
+        cfg = load_config()
+        states = history.list_states(cfg)
+        base = next((s for s in states if s.get("label") == "baseline"), None)
+        restored = history.restore(cfg, base["id"]) if base else None
+        if restored is None:
+            # No labelled baseline snapshot — never restore an arbitrary state (it may
+            # itself contain proposals); just empty the plan artifacts honestly.
+            out_dir = cfg["paths"]["out_dir"]
+            with open(os.path.join(out_dir, "new_masts.geojson"), "w") as f:
+                json.dump({"type": "FeatureCollection", "features": []}, f)
+        rays_now = export.update_master_rays(cfg, [], drop_operator="EE-new")
+        meta = history.snapshot(cfg, "proposals cleared",
+                                extra={"served_pct": (restored or {}).get("served_pct")})
+        return {
+            "cleared": True,
+            "restored_state": restored,
+            "rays_in_master": rays_now,
+            "state_id": meta["id"],
+        }
+
     def _run_history(self):
         return {"states": history.list_states(load_config())}
 
@@ -187,6 +213,7 @@ class Handler(SimpleHTTPRequestHandler):
         "/api/optimize": "_run_optimize",
         "/api/rays": "_run_rays",
         "/api/restore": "_run_restore",
+        "/api/clear_proposals": "_run_clear_proposals",
     }
 
     def do_POST(self):

@@ -131,7 +131,8 @@ export type ToolName =
   | "locate_place"
   | "nearby_places"
   | "describe_network"
-  | "find_masts";
+  | "find_masts"
+  | "clear_proposals";
 
 export type ToolStatus = "queued" | "running" | "success" | "error";
 
