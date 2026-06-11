@@ -156,9 +156,17 @@ def _gpu_snapshot() -> dict[str, Any]:
     except Exception:  # noqa: BLE001 — fall through to nvidia-smi
         pass
 
-    # 2) nvidia-smi — parse the CSV query.
+    # 2) nvidia-smi — parse the CSV query. On the GB10's unified memory nvidia-smi
+    # reports memory fields as "[N/A]" — tolerate per-field N/A instead of bailing,
+    # so the Spark still reports its device name and utilisation.
     try:
         import subprocess
+
+        def _num(s: str) -> int | None:
+            try:
+                return int(float(s))
+            except (TypeError, ValueError):
+                return None
 
         out = subprocess.run(
             [
@@ -174,9 +182,9 @@ def _gpu_snapshot() -> dict[str, Any]:
             name, used, total, util = (c.strip() for c in out.stdout.strip().splitlines()[0].split(","))
             return {
                 "device": name,
-                "vram_used_mib": int(float(used)),
-                "vram_total_mib": int(float(total)),
-                "gpu_util_pct": int(float(util)),
+                "vram_used_mib": _num(used),
+                "vram_total_mib": _num(total),
+                "gpu_util_pct": _num(util),
                 "source": "nvidia-smi",
             }
     except Exception:  # noqa: BLE001 — report unavailable below
