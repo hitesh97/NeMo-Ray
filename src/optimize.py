@@ -35,9 +35,14 @@ def _load_demands(cfg) -> tuple[np.ndarray, list[float]]:
         ring = g["coordinates"][0][0] if g["type"] == "MultiPolygon" else g["coordinates"][0]
         xs = [c[0] for c in ring]
         ys = [c[1] for c in ring]
-        clng, clat = sum(xs) / len(xs), sum(ys) / len(ys)
-        e, n = lnglat_to_en(clng, clat)
-        pts.append([e, n])
+        # The exporter publishes the authoritative centroid (the one its indoor-artifact
+        # filter used, EPSG:27700) — use it so this filter agrees with the exporter's.
+        cen = (feat.get("properties") or {}).get("centroid_en")
+        if cen:
+            pts.append([float(cen[0]), float(cen[1])])
+        else:
+            clng, clat = sum(xs) / len(xs), sum(ys) / len(ys)
+            pts.append(list(lnglat_to_en(clng, clat)))
         # crude area weight via lat/lng extent (only used for reporting)
         areas.append((max(xs) - min(xs)) * (max(ys) - min(ys)))
     return np.array(pts, dtype=float).reshape(-1, 2), areas
@@ -262,37 +267,58 @@ def optimize_to_target(cfg, max_rounds: int | None = None) -> dict:
     serve every outdoor hole under ray-traced propagation (not just the planner's coverage
     circles), or `max_rounds` is hit.
 
-    Each round: cuOpt proposes masts for the current hotspots; the accumulated plan is
-    re-simulated with Sionna RT (verify — which also re-traces the proposed masts' rays
-    into paths.geojson and rewrites hotspots.geojson to the residual holes); any holes the
-    physics says are still unserved feed the next round. Terminates when optimize() finds
-    no outdoor holes left — i.e. 100% of serviceable demand is covered by real simulation.
+    Re-entrant: an existing new_masts.geojson (a prior accumulated plan) is kept and
+    verified FIRST — re-tracing its rays and refreshing the residual hotspots — and new
+    rounds only extend it. The loop converges when RT verification reports 100% of the
+    serviceable former holes served, or when no outdoor hole remains to optimise.
+    (Residual sub-threshold polygons can flicker between re-sims — Monte-Carlo ray
+    sampling jitters cells near the −110 dBm line — so "0 polygons forever" is not the
+    termination test; "every serviceable hole served" is.)
     """
     if max_rounds is None:
         max_rounds = int(cfg["cuopt"].get("max_rounds", 3))
     out = cfg["paths"]["out_dir"]
     masts_path = os.path.join(out, "new_masts.geojson")
 
-    total_feats: list[dict] = []
+    def _read_plan() -> list[dict]:
+        try:
+            with open(masts_path) as f:
+                return json.load(f)["features"]
+        except (OSError, ValueError, KeyError):
+            return []
+
+    def _write_plan(feats: list[dict]) -> None:
+        for k, ft in enumerate(feats):  # unique, stable ids for the HUD markers
+            ft["properties"]["id"] = f"new-{k}"
+        with open(masts_path, "w") as f:
+            json.dump({"type": "FeatureCollection", "features": feats}, f)
+
+    def _met(ver: dict) -> bool:
+        return bool(ver) and ver.get("coverage_of_serviceable_holes_pct", 0.0) >= 100.0
+
+    from . import verify as verifier  # lazy: pulls in Sionna RT (GPU)
+
+    total_feats = _read_plan()
     last_opt: dict = {}
     verification: dict = {}
     rounds_run = 0
-    for rnd in range(1, max_rounds + 1):
-        print(f"\n=== Optimisation round {rnd}/{max_rounds} ===")
-        last_opt = optimize(cfg)
-        if last_opt.get("new_masts", 0) == 0:
-            # No outdoor holes remain — the accumulated plan hits the 100% target.
-            break
-        rounds_run = rnd
-        with open(masts_path) as f:
-            feats = json.load(f)["features"]
-        for k, ft in enumerate(feats):  # unique ids across rounds for the HUD markers
-            ft["properties"]["id"] = f"new-r{rnd}-{k}"
-        total_feats.extend(feats)
-        with open(masts_path, "w") as f:
-            json.dump({"type": "FeatureCollection", "features": total_feats}, f)
 
-        from . import verify as verifier  # lazy: pulls in Sionna RT (GPU)
+    # A pre-existing plan is verified first (rays re-traced, residual hotspots refreshed)
+    # so re-running the loop extends the plan instead of replanning from stale holes.
+    if total_feats:
+        print(f"=== Verifying the existing {len(total_feats)}-mast plan first ===")
+        verification = verifier.verify(cfg)
+
+    for rnd in range(1, max_rounds + 1):
+        if _met(verification):
+            break
+        print(f"\n=== Optimisation round {rnd}/{max_rounds} ===")
+        last_opt = optimize(cfg)  # reads the CURRENT (residual) hotspots
+        if last_opt.get("new_masts", 0) == 0:
+            break  # no outdoor holes remain
+        rounds_run = rnd
+        total_feats.extend(_read_plan())
+        _write_plan(total_feats)
         verification = verifier.verify(cfg)
         print(f"  round {rnd}: plan {len(total_feats)} mast(s) → "
               f"{verification.get('coverage_of_serviceable_holes_pct')}% of serviceable "
@@ -302,15 +328,13 @@ def optimize_to_target(cfg, max_rounds: int | None = None) -> dict:
     # A trailing zero-hole optimize() wipes new_masts.geojson via _write_empty — restore
     # the accumulated plan so the artifact always carries the full verified mast set.
     if total_feats:
-        with open(masts_path, "w") as f:
-            json.dump({"type": "FeatureCollection", "features": total_feats}, f)
+        _write_plan(total_feats)
 
-    target_met = last_opt.get("new_masts", 0) == 0 and bool(total_feats)
     summary = {
         **last_opt,
         "new_masts": len(total_feats),
         "rounds": rounds_run,
-        "target_met": target_met or last_opt.get("coverage_holes", 0) == 0,
+        "target_met": _met(verification) or last_opt.get("coverage_holes", 1) == 0,
         **{k: verification[k] for k in
            ("coverage_of_serviceable_holes_pct", "serviceable_holes",
             "serviceable_holes_now_served", "remaining_hotspots", "served_pct_after")

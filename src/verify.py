@@ -69,6 +69,10 @@ def _original_holes(cfg) -> list[tuple[float, float]]:
         fc = json.load(f)
     pts = []
     for feat in fc["features"]:
+        cen = (feat.get("properties") or {}).get("centroid_en")
+        if cen:  # the exporter's authoritative centroid (EPSG:27700)
+            pts.append((float(cen[0]), float(cen[1])))
+            continue
         g = feat["geometry"]
         ring = g["coordinates"][0][0] if g["type"] == "MultiPolygon" else g["coordinates"][0]
         clng = sum(c[0] for c in ring) / len(ring)
@@ -93,12 +97,16 @@ def verify(cfg) -> dict:
     buildings = load_buildings(cfg)
     tiles = _reconstruct_tiles(cfg)
 
-    # Affected = tiles whose CORE contains a new mast (each proposed mast sits on a hole, so
-    # re-solving that tile verifies the hole). Bounded by the number of distinct mast tiles,
-    # and capped to keep a Greater-London-wide run tractable.
+    # Affected = every tile whose solve a new mast can change: a tile's coverage depends on
+    # all transmitters within tx_radius of its centre (sites_near in rt.solve_tile), so use
+    # the SAME rule resimulate._affected uses. Re-solving only the mast's own core tile
+    # leaves stale no-mast caches in the neighbours — holes near tile boundaries then
+    # "survive" verification and the optimise loop chases phantoms.
+    tx_radius = half + cfg["tiling"].get("tx_radius_m", 1500.0)
     affected_keys = []
     for tile, cache in tiles:
-        if any(abs(s.e - tile.e0) <= half and abs(s.n - tile.n0) <= half for s in new_masts):
+        if any(abs(s.e - tile.e0) <= tx_radius and abs(s.n - tile.n0) <= tx_radius
+               for s in new_masts):
             affected_keys.append(tile.key)
     capped = len(affected_keys) > max_tiles
     affected_set = set(affected_keys[:max_tiles])

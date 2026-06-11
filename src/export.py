@@ -136,9 +136,14 @@ def export_hotspots(cfg, mosaic, buildings=None):
     if polys:
         import geopandas as gpd
         gdf = gpd.GeoDataFrame(geometry=polys, crs="EPSG:27700").to_crs("EPSG:4326")
-        for geom in gdf.geometry:
+        for geom, poly in zip(gdf.geometry, polys):
+            # Publish the EXACT centroid the indoor-artifact filter above used (EPSG:27700),
+            # so optimize/verify classify each hole identically — a ring-vertex average can
+            # land on the other side of a building edge and make the loop chase phantoms.
+            c = poly.centroid
             hfeats.append({"type": "Feature", "geometry": geom.__geo_interface__,
-                           "properties": {"kind": "low_coverage", "threshold_dbm": thr}})
+                           "properties": {"kind": "low_coverage", "threshold_dbm": thr,
+                                          "centroid_en": [round(c.x, 2), round(c.y, 2)]}})
     _write_fc(os.path.join(out, "hotspots.geojson"), hfeats)
     return hfeats
 
