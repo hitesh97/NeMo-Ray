@@ -255,12 +255,15 @@ class ToolSpec:
 class ToolRegistry:
     """Holds the agent's tools + any per-run state (call counts)."""
 
+    # The operator's most recent spatial reference — the COW just deployed or the place
+    # just located. CLASS-level so it survives across runs (a ToolRegistry is built per
+    # run): a follow-up turn like "what's around it?" or "check starlink" can then default
+    # to the spot the previous turn established instead of central London.
+    _last_cow: dict[str, Any] | None = None
+
     def __init__(self) -> None:
         self._calls: dict[str, int] = {}
         self._specs: dict[str, ToolSpec] = {}
-        # The COW most recently placed by deploy_cow, so check_starlink can default to
-        # "the COW we just deployed" when the model omits coordinates.
-        self._last_cow: dict[str, Any] | None = None
         self._register_defaults()
 
     # ── public API ────────────────────────────────────────────────────────────
@@ -495,8 +498,13 @@ class ToolRegistry:
             "knowledge-graph neighbourhood. Give a place name ('near the Shard') or lat/lng, an "
             "optional radius, and optional category filter, to get the nearest landmarks and "
             "emergency services with distances. Use for 'what's near X', 'what hospitals are "
-            "around X', 'what's in this area'. (For the single closest service of one kind, "
-            "prefer find_nearest.)",
+            "around X', 'what's in this area'. Call with NO query for pronoun follow-ups "
+            "('what's around it/there?') — it automatically scans around the operator's most "
+            "recent reference: the place just located or the COW just deployed. ALWAYS still "
+            "pass `categories` when the operator asks for a specific kind ('any hospitals "
+            "near there?' → categories:['hospital']) — without it, closer landmarks can crowd "
+            "the kind they asked about out of the list. (For the single closest service of "
+            "one kind, prefer find_nearest.)",
             {
                 "type": "object",
                 "properties": {
@@ -1279,7 +1287,7 @@ class ToolRegistry:
             "height_m": height,
             "coverage_radius_km": radius_km,
         }
-        self._last_cow = cow
+        ToolRegistry._last_cow = cow
 
         verified = None
         if twin:
@@ -1543,7 +1551,7 @@ class ToolRegistry:
         lat, lng = float(node["lat"]), float(node["lng"])
         # Remember as the reference point so a follow-up nearby_places/find_nearest can default
         # to "around the place we just flew to" (mirrors deploy_cow → check_starlink chaining).
-        self._last_cow = {"lat": lat, "lng": lng, "label": node["name"]}
+        ToolRegistry._last_cow = {"lat": lat, "lng": lng, "label": node["name"]}
         zoom = args.get("zoom")
         zoom = float(zoom) if zoom is not None else category_zoom(node["category"])
         is_em = self._is_emergency_cat(node["category"])
