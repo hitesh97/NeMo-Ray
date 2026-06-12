@@ -271,6 +271,10 @@ class ToolRegistry:
     # run): a follow-up turn like "what's around it?" or "check starlink" can then default
     # to the spot the previous turn established instead of central London.
     _last_cow: dict[str, Any] | None = None
+    # The mast ids of the most recently SIMULATED outage — so the follow-up "deploy the
+    # cell-on-wheels" targets exactly that incident even when the model omits the ids
+    # (never a canned default scenario on the other side of the map).
+    _last_outage: list[str] | None = None
 
     def __init__(self) -> None:
         self._calls: dict[str, int] = {}
@@ -408,7 +412,9 @@ class ToolRegistry:
             "garaged at each fire station and can be towed up to 3 km, so it picks the "
             "dead zone that both protects the most emergency-service buildings and sits "
             "within tow range of a station, places a 20 m COW mast there, and (with the "
-            "twin) verifies how many coverage holes it closes.",
+            "twin) verifies how many coverage holes it closes. Omit disabled_site_ids to "
+            "target the outage that was just simulated (or, if none, the network's current "
+            "real coverage holes).",
             {
                 "type": "object",
                 "properties": {
@@ -1079,6 +1085,7 @@ class ToolRegistry:
         site_ids = resolve_outage_site_ids(
             list(explicit) if explicit else None, args.get("scenario")
         )
+        ToolRegistry._last_outage = list(site_ids)
         twin = self._twin_url()
         source = ""
         summary: dict[str, Any] = {}
@@ -1254,24 +1261,46 @@ class ToolRegistry:
             restoration_eta,
         )
 
-        disabled = resolve_outage_site_ids(
-            list(args.get("disabled_site_ids") or []) or None, args.get("scenario")
-        )
+        explicit = list(args.get("disabled_site_ids") or [])
+        scenario = args.get("scenario")
+        if explicit:
+            disabled = explicit
+        elif ToolRegistry._last_outage:
+            disabled = list(ToolRegistry._last_outage)  # the incident just simulated
+        elif scenario and scenario in OUTAGE_CATALOG:
+            disabled = list(OUTAGE_CATALOG[scenario])
+        else:
+            disabled = []  # no outage context → repair the network's current real holes
         max_km = float(args.get("max_km", COW_MAX_KM))
         height = float(args.get("height_m", COW_HEIGHT_M))
         radius_km = COW_COVERAGE_KM
 
         twin = self._twin_url()
+        # The network's CURRENT holes: after a simulate_outage the twin has re-exported
+        # hotspots.geojson with the real post-outage dead zones — that file is the truth of
+        # where coverage is broken right now (live twin first, the on-disk artifact as the
+        # offline fallback).
         twin_holes = self._fetch_twin_holes(twin) if twin else None
-        # The dead zone opens AT the masts that went down, so anchor the COW candidates on the
-        # downed masts' real positions first — accurate by construction, and it matches the dead
-        # zones simulate_outage painted. The twin's hotspots.geojson is the *baseline* scene-wide
-        # hole set (not recomputed for this outage), so it's only a fallback when no downed-mast
-        # position resolves (e.g. masts.geojson absent) — and even then clipped to near the
-        # outage, never scene-wide (which would strand the COW wherever the city's holes cluster).
-        mast_zones = _zones_for_sites(disabled)
-        holes = _zones_near_sites(twin_holes, disabled) if (twin_holes and not mast_zones) else None
-        feats = mast_zones or holes or []
+        if twin_holes is None:
+            from .places import load_hotspots
+            twin_holes = [
+                {"type": "Feature",
+                 "properties": {"id": h["id"], "severity": h["severity"]},
+                 "geometry": {"type": "Polygon", "coordinates": [[
+                     [h["bbox"][0], h["bbox"][1]], [h["bbox"][2], h["bbox"][1]],
+                     [h["bbox"][2], h["bbox"][3]], [h["bbox"][0], h["bbox"][3]],
+                     [h["bbox"][0], h["bbox"][1]]]]}}
+                for h in load_hotspots()
+            ] or None
+            if twin_holes:
+                _warn_degraded("deploy_cow", "twin unreachable — using hotspots artifact")
+        if disabled:
+            # Target THIS incident: the real holes near the downed masts; synthetic boxes at
+            # the mast positions only if no hole data resolves at all.
+            feats = (_zones_near_sites(twin_holes, disabled) if twin_holes else [])                 or _zones_for_sites(disabled)
+        else:
+            # No outage context: consider every current real hole, tow-feasibility decides.
+            feats = twin_holes or []
         if not twin_holes:
             _warn_degraded(
                 "deploy_cow",
@@ -1889,6 +1918,7 @@ class ToolRegistry:
                 result=f"Clearing the proposals failed: {exc}",
                 observation={"error": "clear failed", "detail": repr(exc), "source": "none"},
             )
+        ToolRegistry._last_outage = None  # baseline restored — no outage is in effect
         restored = summary.get("restored_state") or {}
         served = restored.get("served_pct")
         tail = f" Baseline coverage restored ({served}% served)." if served is not None else ""
