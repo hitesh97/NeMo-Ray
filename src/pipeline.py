@@ -181,7 +181,14 @@ def run(args):
     n_bldg = export_buildings(cfg, buildings, mosaic)
     print(f"  exported {n_bldg} building footprints")
     perf["wall_time_s"] = round(time.time() - t_start, 1)
-    summary = export_all(cfg, mosaic, sites, rays, n_buildings=n_bldg,
+    # Publish ONLY the masts that participate in this run's solve — the ones within
+    # transmitter range (tile_size/2 + tx_radius_m) of a simulated tile centre. The rest
+    # of the Greater-London inventory never illuminates a solved tile, so exporting it
+    # only bloats the HUD towers, the agent's knowledge graph and the KPI counts.
+    participating = [s for s in sites
+                     if any(sites_near([s], t.e0, t.n0, tx_radius) for t in tiles)]
+    print(f"  {len(participating)} of {len(sites)} masts participate in the simulated area")
+    summary = export_all(cfg, mosaic, participating, rays, n_buildings=n_bldg,
                          performance=perf, buildings=buildings)
     summary["wall_time_s"] = perf["wall_time_s"]
     print("\n=== Summary ===")
