@@ -148,7 +148,7 @@ def main() -> int:  # noqa: PLR0915 — a linear test script
     sim_result = r["results"].get("simulate_outage", "")
     check("9 twin re-simulated", "Sionna" in sim_result or "dead zone" in sim_result,
           f"{r['secs']}s · {sim_result[:80]}")
-    check("9 painted zones", "zones" in r["ops"] or "markers" in r["ops"], str(r["ops"]))
+    check("9 drove the map", "focus" in r["ops"] or "markers" in r["ops"], str(r["ops"]))
     check("9 substantive final", len(r["final"]) > 60, r["final"][:90])
     # 'Simulate' must NEVER auto-run the restoration: one tool, then stop and ask.
     check("9 simulate only — no auto-optimise", r["tools"] == ["simulate_outage"], str(r["tools"]))

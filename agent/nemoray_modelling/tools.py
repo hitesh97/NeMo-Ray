@@ -416,9 +416,9 @@ class ToolRegistry:
                     },
                     "keep_overlay": {
                         "type": "boolean",
-                        "description": "Keep the outage's dead-zone + affected-building "
-                        "highlights on the map instead of clearing them (use after "
-                        "simulate_outage so the full incident stays painted).",
+                        "description": "Keep the outage's affected-building highlights on the "
+                        "map instead of clearing them (use after simulate_outage so "
+                        "the incident context stays visible).",
                     },
                 },
                 "required": [],
@@ -617,25 +617,23 @@ class ToolRegistry:
                  "severity": h["severity"]}
                 for h in hs
             ]
-            zone_dirs = [
-                {"id": h["id"], "bbox": [round(x, 6) for x in h["bbox"]],
-                 "severity": h["severity"]}
-                for h in hs
-            ]
-            zaction: dict[str, Any] = {"op": "zones", "zones": zone_dirs}
+            # Fly the camera over the holes; the hotspot polygons + coverage heatmap (the
+            # auto-refreshed artifacts) draw them — no overlay rectangles.
+            ui: list[dict[str, Any]] = [{"op": "clear"}]
             ub = _union_bbox([h["bbox"] for h in hs])
             if ub:
-                zaction["focus"] = {"bbox": [round(x, 6) for x in ub], "pitch": 35}
+                ui.append({"op": "focus",
+                           "focus": {"bbox": [round(x, 6) for x in ub], "pitch": 35}})
             return ToolResult(
                 result=f"{len(dead_zones)} dead zones across the simulated area "
-                f"(from the Sionna RT coverage map) — highlighted on the map",
+                f"(from the Sionna RT coverage map) — shown on the map",
                 observation={
                     "disabled_cells": disabled,
                     "dead_zone_count": len(dead_zones),
                     "dead_zones": dead_zones[:8],
                     "source": "coverage artifact (hotspots.geojson)",
                 },
-                ui_actions=[{"op": "clear"}, zaction],
+                ui_actions=ui,
             )
         # No twin and no artifact: be honest about it.
         _warn_degraded("run_sionna_coverage", "no twin and no hotspots.geojson artifact")
@@ -1096,33 +1094,21 @@ class ToolRegistry:
             f"{n_aff} emergency-service building(s) lose coverage"
             + (f" ({bits})" if bits else "")
         )
-        # ── map directives: paint the dead-zone ground (a bbox per hole) + the affected
-        # emergency buildings, and fit the camera to the whole outage extent. Geometry rides
-        # here, NOT in the observation, so the LLM context stays lean.
-        zone_dirs: list[dict[str, Any]] = []
-        for i, f in enumerate(feats):
-            bb = _feature_bbox(f)
-            if not bb:
-                continue
-            props = f.get("properties", {})
-            zone_dirs.append({
-                "id": props.get("id") or f"dz-{i:02d}",
-                "bbox": [round(x, 6) for x in bb],
-                "severity": props.get("severity", "major"),
-            })
-        zone_dirs = zone_dirs[:300]
+        # ── map directives: mark the affected emergency buildings and fit the camera to the
+        # outage extent. The holes themselves are NOT painted as overlay rectangles — the
+        # re-simulated coverage heatmap + hotspot polygons (auto-refreshed artifacts) already
+        # show them with real shapes. Geometry rides here, NOT in the observation, so the
+        # LLM context stays lean.
         building_markers = [
             {"id": f"aff-{j}", "position": [b["lng"], b["lat"]], "kind": "building",
              "label": b["name"], "detail": b["kind"].title()}
             for j, b in enumerate(affected)
         ]
         ui: list[dict[str, Any]] = [{"op": "clear"}]
-        if zone_dirs:
-            zaction: dict[str, Any] = {"op": "zones", "zones": zone_dirs}
-            ub = _union_bbox([zd["bbox"] for zd in zone_dirs])
-            if ub:
-                zaction["focus"] = {"bbox": [round(x, 6) for x in ub], "pitch": 35}
-            ui.append(zaction)
+        ub = _union_bbox([bb for bb in (_feature_bbox(f) for f in feats) if bb])
+        if ub:
+            ui.append({"op": "focus",
+                       "focus": {"bbox": [round(x, 6) for x in ub], "pitch": 35}})
         if building_markers:
             ui.append({"op": "markers", "markers": building_markers})
 
