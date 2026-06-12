@@ -150,6 +150,10 @@ def main() -> int:  # noqa: PLR0915 — a linear test script
           f"{r['secs']}s · {sim_result[:80]}")
     check("9 painted zones", "zones" in r["ops"] or "markers" in r["ops"], str(r["ops"]))
     check("9 substantive final", len(r["final"]) > 60, r["final"][:90])
+    # 'Simulate' must NEVER auto-run the restoration: one tool, then stop and ask.
+    check("9 simulate only — no auto-optimise", r["tools"] == ["simulate_outage"], str(r["tools"]))
+    check("9 asks restoration choice", "(1)" in r["final"] and "(2)" in r["final"],
+          r["final"][-120:])
     hist9 = turn_pair(p9, r["final"])
 
     print("\n━━ 10. follow-up — choose the COW restoration path")
