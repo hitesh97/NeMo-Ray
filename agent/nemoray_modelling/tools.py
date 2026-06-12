@@ -28,6 +28,7 @@ a ``[NeMo-Ray DEGRADED] <tool>: <reason>`` stderr line flags any degradation.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from collections.abc import Callable
@@ -57,6 +58,62 @@ def _feature_bbox(feat: dict[str, Any]) -> list[float] | None:
     xs = [p[0] for p in pts]
     ys = [p[1] for p in pts]
     return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _feature_area_m2(feat: dict[str, Any]) -> float:
+    """Approximate area (m²) of a (Multi)Polygon feature's outer rings — shoelace over a
+    local planar projection. Used to pick THE outage's big red zone."""
+    geom = feat.get("geometry") or {}
+    t = geom.get("type")
+    coords = geom.get("coordinates") or []
+    rings = coords[:1] if t == "Polygon" else [poly[0] for poly in coords if poly]
+    if t == "Polygon":
+        rings = [coords[0]] if coords else []
+    total = 0.0
+    for ring in rings:
+        if len(ring) < 3:
+            continue
+        lat0 = sum(pt[1] for pt in ring) / len(ring)
+        kx = 111320.0 * math.cos(math.radians(lat0))
+        ky = 110540.0
+        acc = 0.0
+        for i in range(len(ring)):
+            x1, y1 = ring[i][0] * kx, ring[i][1] * ky
+            x2, y2 = ring[(i + 1) % len(ring)][0] * kx, ring[(i + 1) % len(ring)][1] * ky
+            acc += x1 * y2 - x2 * y1
+        total += abs(acc) / 2.0
+    return total
+
+
+def _feature_area_centroid(feat: dict[str, Any]) -> tuple[float, float] | None:
+    """Area-weighted centroid (lng, lat) of the LARGEST outer ring — the visual centre of
+    the red blob, robust to elongated/concave shapes (vertex averages drift to dense edges)."""
+    geom = feat.get("geometry") or {}
+    t = geom.get("type")
+    coords = geom.get("coordinates") or []
+    rings = ([coords[0]] if coords else []) if t == "Polygon" else [p[0] for p in coords if p]
+    best_ring, best_area = None, -1.0
+    for ring in rings:
+        if len(ring) < 3:
+            continue
+        a = _feature_area_m2({"geometry": {"type": "Polygon", "coordinates": [ring]}})
+        if a > best_area:
+            best_ring, best_area = ring, a
+    if best_ring is None:
+        return None
+    # planar shoelace centroid
+    acc = cx = cy = 0.0
+    for i in range(len(best_ring)):
+        x1, y1 = best_ring[i][0], best_ring[i][1]
+        x2, y2 = best_ring[(i + 1) % len(best_ring)][0], best_ring[(i + 1) % len(best_ring)][1]
+        cross = x1 * y2 - x2 * y1
+        acc += cross
+        cx += (x1 + x2) * cross
+        cy += (y1 + y2) * cross
+    if abs(acc) < 1e-12:
+        n = len(best_ring)
+        return (sum(p[0] for p in best_ring) / n, sum(p[1] for p in best_ring) / n)
+    return (cx / (3.0 * acc), cy / (3.0 * acc))
 
 
 def _union_bbox(bboxes: list[list[float]]) -> list[float] | None:
@@ -150,6 +207,41 @@ def _zones_for_sites(site_ids: list[str]) -> list[dict[str, Any]]:
             "geometry": _box_polygon(p[0], p[1]),
         })
     return feats
+
+
+def _diff_new_zones(pre: list[dict[str, Any]] | None,
+                    post: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The dead zones a change actually CAUSED: holes in `post` that are either brand-new
+    (no pre-hole centroid within ~250 m) or grew substantially (an outage often merges new
+    dead cells into an existing baseline hole — same centroid, much bigger blob). These are
+    the red zones the operator watches appear, with no radius guessing."""
+    from .emergency import feature_centroid, haversine_km
+
+    if not pre:
+        return []
+    pre_info = []
+    for f in pre:
+        c = feature_centroid(f)
+        if c:
+            pre_info.append((c, _feature_area_m2(f)))
+    out = []
+    for f in post:
+        c = feature_centroid(f)
+        if not c:
+            continue
+        nearest = None
+        nearest_km = 1e9
+        for pc, pa in pre_info:
+            d = haversine_km(c[1], c[0], pc[1], pc[0])
+            if d < nearest_km:
+                nearest, nearest_km = (pc, pa), d
+        if nearest is None or nearest_km > 0.25:
+            out.append(f)                      # brand-new hole
+            continue
+        area = _feature_area_m2(f)
+        if area > nearest[1] * 1.5 + 2000.0:   # grew by >50% (+2 cells of slack)
+            out.append(f)                      # existing hole the outage blew open
+    return out
 
 
 # How close a coverage hole must sit to a downed mast to count as part of *this* outage. The
@@ -275,6 +367,14 @@ class ToolRegistry:
     # cell-on-wheels" targets exactly that incident even when the model omits the ids
     # (never a canned default scenario on the other side of the map).
     _last_outage: list[str] | None = None
+    # The dead-zone features THIS outage opened (post-outage holes minus pre-outage
+    # holes) — the red blobs the operator is looking at; deploy_cow centres on the
+    # largest of them.
+    _last_outage_zones: list[dict[str, Any]] | None = None
+    # The buildings the outage left WITHOUT service (radio-map sampled). Their dead cells
+    # are often filtered out of the hole polygons (indoor-artifact filter), so deploy_cow
+    # adds a zone around each — the COW must serve them, not just outdoor street cells.
+    _last_affected: list[dict[str, Any]] | None = None
 
     def __init__(self) -> None:
         self._calls: dict[str, int] = {}
@@ -408,13 +508,12 @@ class ToolRegistry:
         )
         self._add(
             "deploy_cow",
-            "Find the best deployment for a Cell-on-Wheels during an outage. One COW is "
-            "garaged at each fire station and can be towed up to 3 km, so it picks the "
-            "dead zone that both protects the most emergency-service buildings and sits "
-            "within tow range of a station, places a 20 m COW mast there, and (with the "
-            "twin) verifies how many coverage holes it closes. Omit disabled_site_ids to "
-            "target the outage that was just simulated (or, if none, the network's current "
-            "real coverage holes).",
+            "Deploy a Cell-on-Wheels for an outage: places a 20 m COW at the CENTRE of the "
+            "largest dead zone the outage opened, tows it from the nearest fire station "
+            "(one COW garaged at each, standard range 3 km), then re-simulates the coverage "
+            "map so the restoration is visible — reporting holes before/after and any "
+            "emergency buildings still without service. Omit disabled_site_ids to target "
+            "the outage that was just simulated (or, if none, the network's current holes).",
             {
                 "type": "object",
                 "properties": {
@@ -1092,15 +1191,19 @@ class ToolRegistry:
         feats: list[dict[str, Any]] = []
 
         if twin:
+            pre_holes = self._fetch_twin_holes(twin)  # the holes BEFORE this outage
             res = self._post_coverage(twin, list(site_ids))
             if res is not None and res[0].get("busy"):
                 return _busy_result("simulate_outage")
             if res is not None and res[0].get("disabled_matched"):
-                summary, feats = res
-                # Clip the twin's scene-wide holes to the outage neighbourhood — otherwise every
-                # scenario reports the same city-wide dead zones (and emergency buildings right
-                # across London) instead of the chunk around the masts that went down.
-                feats = _zones_near_sites(feats, site_ids) or _zones_for_sites(site_ids) or feats
+                summary, post_feats = res
+                # The outage's OWN dead zones = holes that exist now but not before (diff),
+                # wherever they opened. Fall back to the radius clip, then to boxes at the
+                # downed masts, only when the diff can't be computed.
+                new_zones = _diff_new_zones(pre_holes, post_feats)
+                feats = (new_zones or _zones_near_sites(post_feats, site_ids)
+                         or _zones_for_sites(site_ids) or post_feats)
+                ToolRegistry._last_outage_zones = feats
                 source = "Sionna RT coverage twin"
 
         if not source:
@@ -1137,6 +1240,9 @@ class ToolRegistry:
             degraded = []
         counts = self._summarise_buildings(affected)
         degraded_counts = self._summarise_buildings(degraded)
+        ToolRegistry._last_affected = [
+            b for b in affected if b.get("lat") is not None and b.get("lng") is not None
+        ]
         dead_zones = []
         for i, f in enumerate(feats):
             c = feature_centroid(f)
@@ -1279,7 +1385,6 @@ class ToolRegistry:
             COW_MAX_KM,
             buildings_within_radius,
             feature_centroid,
-            haversine_km,
             load_emergency_buildings,
             load_fire_stations,
             nearest_depot,
@@ -1319,10 +1424,16 @@ class ToolRegistry:
             ] or None
             if twin_holes:
                 _warn_degraded("deploy_cow", "twin unreachable — using hotspots artifact")
-        if disabled:
+        if ToolRegistry._last_outage_zones and (not explicit
+                                                or disabled == ToolRegistry._last_outage):
+            # The zones THIS outage opened (diffed at simulate time) — the red blobs the
+            # operator is looking at right now.
+            feats = list(ToolRegistry._last_outage_zones)
+        elif disabled:
             # Target THIS incident: the real holes near the downed masts; synthetic boxes at
             # the mast positions only if no hole data resolves at all.
-            feats = (_zones_near_sites(twin_holes, disabled) if twin_holes else [])                 or _zones_for_sites(disabled)
+            feats = (_zones_near_sites(twin_holes, disabled) if twin_holes else []) \
+                or _zones_for_sites(disabled)
         else:
             # No outage context: consider every current real hole, tow-feasibility decides.
             feats = twin_holes or []
@@ -1346,58 +1457,44 @@ class ToolRegistry:
         depots = list(load_fire_stations())
         buildings = list(load_emergency_buildings())
 
-        # Candidate COW positions are the dead-zone centroids. Cache each centroid so we can
-        # also count how many *other* holes fall inside a candidate's coverage disc.
-        cells = [(i, f, feature_centroid(f)) for i, f in enumerate(feats)]
-        candidates = []
-        for i, f, c in cells:
-            if not c:
-                continue
-            clng, clat = c
-            depot, km = nearest_depot(clat, clng, depots)
-            # A parked COW serves everything inside its redistribution radius — not just the
-            # single hole it sits on. Score by buildings (and holes) within COW_COVERAGE_KM.
-            protected = buildings_within_radius(clat, clng, radius_km, buildings)
-            holes_in_range = sum(
-                1 for (_, _, oc) in cells
-                if oc and haversine_km(clat, clng, oc[1], oc[0]) <= radius_km
-            )
-            candidates.append({
-                "dead_zone_id": (f.get("properties", {}) or {}).get("id") or f"dz-{i:02d}",
-                "lat": round(clat, 5),
-                "lng": round(clng, 5),
-                "buildings_protected": len(protected),
-                "holes_in_range": holes_in_range,
-                "depot": depot,
-                "tow_km": round(km, 2),
-                "reachable": km <= max_km,
+        # DETERMINISTIC placement: the COW goes to the CENTRE of the LARGEST dead zone the
+        # outage opened — the big red blob the operator is looking at. No multi-candidate
+        # scoring: predictable, visually obvious, and the re-simulation then shows that
+        # exact zone being filled back in. Buildings the outage left WITHOUT service count
+        # as zones in their own right (their dead cells are dropped from the hole polygons
+        # by the indoor-artifact filter) — a ~500 m box each, so a dead hospital or fire
+        # station outweighs street-cell specks and the COW lands where it matters.
+        feats = list(feats)
+        for j, b in enumerate(ToolRegistry._last_affected or []):
+            feats.append({
+                "type": "Feature",
+                "properties": {"id": f"bldg-{j}-{b['kind']}", "severity": "critical",
+                               "building": b["name"]},
+                "geometry": _box_polygon(b["lng"], b["lat"], h=0.0023),
             })
-
-        reachable = [c for c in candidates if c["reachable"]]
-        if not reachable:
-            nearest = min((c["tow_km"] for c in candidates), default=None)
-            return ToolResult(
-                result=f"No dead zone within {max_km:.0f} km of a fire station "
-                f"(closest {nearest} km) — a COW cannot reach it; consider a permanent mast.",
-                observation={"candidates": candidates, "max_km": max_km, "feasible": False},
-            )
-
-        # Best = protects most buildings within its 2 km reach, ties broken by holes covered
-        # then shortest tow.
-        best = max(
-            reachable,
-            key=lambda c: (c["buildings_protected"], c["holes_in_range"], -c["tow_km"]),
-        )
+        target = max(feats, key=_feature_area_m2)
+        c = _feature_area_centroid(target) or feature_centroid(target)
+        clng, clat = c
+        zone_id = (target.get("properties", {}) or {}).get("id") or "dz-00"
+        zone_area_km2 = _feature_area_m2(target) / 1e6
+        depot, tow_km = nearest_depot(clat, clng, depots)
+        tow_km = round(tow_km, 2)
+        tow_note = ""
+        if tow_km > max_km:
+            tow_note = (f" NOTE: the tow is {tow_km} km — beyond the standard "
+                        f"{max_km:.0f} km range; expect a longer mobilisation.")
+        protected = buildings_within_radius(clat, clng, radius_km, buildings)
         cow = {
             "id": "COW-1",
-            "lat": best["lat"],
-            "lng": best["lng"],
+            "lat": round(clat, 5),
+            "lng": round(clng, 5),
             "height_m": height,
             "coverage_radius_km": radius_km,
         }
         ToolRegistry._last_cow = cow
 
         verified = None
+        still_out: list[dict[str, Any]] | None = None
         if twin:
             res = self._post_coverage(twin, disabled, [cow])
             if res is not None and res[0].get("busy"):
@@ -1405,32 +1502,31 @@ class ToolRegistry:
                 _warn_degraded("deploy_cow", "optimiser busy — COW hole-closure not verified")
             if res is not None:
                 after = res[0].get("coverage_holes")
-                before = len(feats)
+                # network-wide comparison (the outage zone list is a subset)
+                before = len(twin_holes) if twin_holes else len(feats)
                 verified = {
                     "holes_before": before,
                     "holes_after": after,
                     "served_pct_after": res[0].get("served_pct"),
                     "tiles_resimulated": res[0].get("tiles_resimulated"),
                 }
+                bs = res[0].get("building_service")
+                if bs is not None:
+                    still_out = [b for b in bs if not b.get("served")]
             else:
                 _warn_degraded("deploy_cow", "twin unreachable — COW hole-closure not verified")
-
-        depot = best["depot"]
         # Traffic-aware restoration ETA: how long until the COW is on-site and serving — drive
         # from the depot (great-circle tow × road factor, scaled by current traffic) + dispatch
         # + setup. Same model as nemoray/lib/geo/restoration.ts drives the scenario timeline.
-        eta = restoration_eta(best["tow_km"])
-        tail = (
-            f"holes {verified['holes_before']}→{verified['holes_after']} after COW"
-            if verified else "set TWIN_URL to verify hole closure via Sionna RT"
-        )
-        # Observation feeds the LLM — send the decision + a small ranked shortlist, NOT the
-        # full per-hole candidate list (one entry per dead zone overflows the context).
-        shortlist = [
-            {"dead_zone_id": c["dead_zone_id"], "tow_km": c["tow_km"],
-             "buildings_protected": c["buildings_protected"], "station": c["depot"]["name"]}
-            for c in sorted(reachable, key=lambda c: (-c["buildings_protected"], c["tow_km"]))[:5]
-        ]
+        eta = restoration_eta(tow_km)
+        if verified:
+            tail = (f"coverage re-simulated: holes {verified['holes_before']}→"
+                    f"{verified['holes_after']}, {verified['served_pct_after']}% served")
+            if still_out is not None:
+                tail += (f"; {len(still_out)} building(s) still without service"
+                         if still_out else "; every emergency building back in service")
+        else:
+            tail = "set TWIN_URL to re-simulate and verify the restoration"
         # ── map directives: mark the source fire station (where to retrieve the COW from),
         # the COW drop point + its coverage disc, and the tow line between them; fly there. ──
         cow_marker = {
@@ -1440,7 +1536,7 @@ class ToolRegistry:
         }
         station_marker = {
             "id": "cow-source", "position": [depot["lng"], depot["lat"]], "kind": "station",
-            "label": depot["name"], "detail": f"COW source · {best['tow_km']} km tow",
+            "label": depot["name"], "detail": f"COW source · {tow_km} km tow",
         }
         # keep_overlay layers the COW on top of the outage zones + affected-building markers
         # (the scenario macro sets it) instead of wiping them — so the final map shows the dead
@@ -1456,28 +1552,32 @@ class ToolRegistry:
             "focus": {"center": [cow["lng"], cow["lat"]], "zoom": 13.5, "pitch": 45},
         })
         return ToolResult(
-            result=f"Deploy COW from {depot['name']} ({best['tow_km']} km tow) to "
-            f"({best['lat']}, {best['lng']}) @ {height:.0f} m — covers a {radius_km:.1f} km "
-            f"radius, protecting {best['buildings_protected']} emergency building(s). "
-            f"Coverage restored in ~{eta['total_min']:.0f} min "
-            f"({eta['drive_min']:.0f} min tow at traffic ×{eta['traffic_factor']}, "
-            f"{eta['setup_min']:.0f} min setup); {tail}",
+            result=f"COW placed at the centre of the largest outage dead zone {zone_id} "
+            f"({zone_area_km2:.2f} km²) at ({cow['lat']}, {cow['lng']}), towed from "
+            f"{depot['name']} ({tow_km} km) @ {height:.0f} m — {radius_km:.1f} km coverage "
+            f"radius, {len(protected)} emergency building(s) inside it. "
+            f"On air in ~{eta['total_min']:.0f} min ({eta['drive_min']:.0f} min tow at "
+            f"traffic ×{eta['traffic_factor']}, {eta['setup_min']:.0f} min setup); "
+            f"{tail}.{tow_note}",
             observation={
                 "cow": cow,
+                "placed_in_zone": zone_id,
+                "zone_area_km2": round(zone_area_km2, 3),
                 "coverage_radius_km": radius_km,
-                "holes_in_range": best["holes_in_range"],
                 "source_station": {"name": depot["name"], "lat": depot["lat"], "lng": depot["lng"]},
-                "tow_km": best["tow_km"],
+                "tow_km": tow_km,
                 "max_km": max_km,
-                "buildings_protected": best["buildings_protected"],
-                "candidate_count": len(candidates),
-                "reachable_count": len(reachable),
-                "alternatives": shortlist,
+                "tow_within_range": tow_km <= max_km,
+                "buildings_protected": len(protected),
+                "buildings_still_out": [
+                    {"name": b["name"], "kind": b["kind"], "dbm": b["dbm"]}
+                    for b in (still_out or [])
+                ] if still_out is not None else None,
                 "restoration": eta,
                 "verified": verified,
                 "feasible": True,
                 "source": "Sionna RT coverage twin" if verified
-                else "fire-station depots + dead-zone geometry (hole closure unverified)",
+                else "dead-zone geometry (restoration unverified — twin offline)",
             },
             ui_actions=ui,
         )
@@ -1944,6 +2044,8 @@ class ToolRegistry:
                 observation={"error": "clear failed", "detail": repr(exc), "source": "none"},
             )
         ToolRegistry._last_outage = None  # baseline restored — no outage is in effect
+        ToolRegistry._last_outage_zones = None
+        ToolRegistry._last_affected = None
         restored = summary.get("restored_state") or {}
         served = restored.get("served_pct")
         tail = f" Baseline coverage restored ({served}% served)." if served is not None else ""
