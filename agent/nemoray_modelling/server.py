@@ -209,6 +209,20 @@ def gpu() -> dict[str, Any]:
     return snap
 
 
+@app.post("/reset")
+def reset() -> dict[str, Any]:
+    """Full state reset for the HUD's Reset button: the twin restores its baseline
+    snapshot (coverage, hotspots, plan, summary) and strips any proposed-mast rays.
+    Conversation/overlay state is the HUD's own; this clears the simulation truth."""
+    twin = os.getenv("TWIN_URL", "http://localhost:8000").rstrip("/")
+    try:
+        r = httpx.post(f"{twin}/api/clear_proposals", timeout=120.0)
+        r.raise_for_status()
+        return {"reset": True, **r.json()}
+    except Exception as exc:  # noqa: BLE001 — surface honestly
+        return {"reset": False, "error": str(exc)}
+
+
 @app.post("/agent")
 def agent(body: AgentRequest) -> StreamingResponse:
     """Stream the agent run as Server-Sent Events of `AgentStreamEvent` frames."""

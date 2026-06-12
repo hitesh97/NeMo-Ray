@@ -575,7 +575,24 @@ export const useNemoStore = create<NemoState>((set, get) => ({
       }
     }),
   resetConversation: () =>
-    set({ messages: [], toolCalls: [], streaming: false, activeMessageId: null, agentMap: EMPTY_AGENT_MAP }),
+    {
+      // Everything back to the original state: conversation + overlay (client), the
+      // outage/reference/proposal state (client), AND the simulation itself — the twin
+      // restores its baseline snapshot, then the map re-fetches the artifacts.
+      set({
+        messages: [],
+        toolCalls: [],
+        streaming: false,
+        activeMessageId: null,
+        agentMap: EMPTY_AGENT_MAP,
+        deactivatedSiteIds: [],
+        referencedSiteIds: [],
+        proposals: [],
+      });
+      void fetch("/api/agent/reset", { method: "POST" })
+        .then(() => set((st) => ({ artifactsNonce: st.artifactsNonce + 1 })))
+        .catch(() => {});
+    },
 
   // ── nemotron inference telemetry ──
   nemotron: EMPTY_NEMOTRON,
