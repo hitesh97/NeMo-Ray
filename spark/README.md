@@ -1,7 +1,7 @@
 # Running NeMo-Ray locally on an NVIDIA DGX Spark (GB10)
 
 Run the whole NeMo-Ray stack on **one local DGX Spark**, all on-device. (`brev/` is the
-cloud-H200 mirror for when you don't have the Spark to hand.)
+cloud GPU mirror — BF16/FP8, no NVFP4 — for when you don't have the Spark to hand.)
 
 1. **Sionna RT coverage pipeline** (`src/`) — generates `nemoray/public/raytracing/*`.
 2. **Nemotron agent stack:**

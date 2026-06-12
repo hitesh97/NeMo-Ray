@@ -387,6 +387,14 @@ Environment variables (`.env.example`):
 
 ---
 
+## Deployment targets
+
+- **DGX Spark (GB10)** — the primary target: `spark/` (NVFP4 Nemotron Super via vLLM,
+  unified-memory tuning). See `spark/README.md`.
+- **Brev / cloud x86 GPUs** — no Spark or NVFP4 needed: `brev/` serves the same
+  Nemotron-3 Super in BF16 (multi-GPU tensor parallel) or on-the-fly FP8.
+  See `brev/README.md`.
+
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
