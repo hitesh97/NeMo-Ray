@@ -1164,6 +1164,18 @@ class ToolRegistry:
                         "summary": summary,
                         "source": "Sionna RT coverage twin",
                     },
+                    # The mast inventory artifact still draws the tower at its OLD spot
+                    # (it goes red via the deactivated set); mark the new position so the
+                    # operator sees where it now stands, and fly there.
+                    ui_actions=[
+                        {"op": "clear"},
+                        {"op": "markers",
+                         "markers": [{"id": f"moved-{site_id}",
+                                      "position": [lng, lat], "kind": "proposal",
+                                      "label": f"{site_id} (relocated)",
+                                      "detail": "re-simulated at this position"}],
+                         "focus": {"center": [lng, lat], "zoom": 14.5, "pitch": 45}},
+                    ],
                 )
             _warn_degraded("move_mast", "twin unreachable or neither old/new mast matched")
         else:

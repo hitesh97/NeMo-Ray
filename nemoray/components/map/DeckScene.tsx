@@ -1757,6 +1757,7 @@ export function DeckScene({
     let raf = 0;
     let cancelled = false;
     let satInterval = 0;
+    let summaryInterval = 0;
 
     (async () => {
       const bounds = (await fetchJSON(`${DATA}/coverage_bounds.json`)) as Bounds;
@@ -1870,13 +1871,19 @@ export function DeckScene({
       // gazetteer, emergency services) never change per run and are not re-fetched.
       const refreshArtifacts = async () => {
         const v = Date.now();
-        const [raysFC2, newFC2, holesFC2] = await Promise.all([
-          fetchJSON(`${DATA}/paths.geojson?v=${v}`).catch(() => null) as Promise<FC<RayFeature> | null>,
+        // paths.geojson is large (tens of MB) and only changes when the proposed-mast
+        // plan changes (verify appends EE-new rays / clear strips them) — fetch it
+        // WITHOUT a cache-buster so the browser revalidates by ETag and a 304 keeps
+        // outage-sim refreshes cheap. The small artifacts always cache-bust.
+        const [raysFC2, mastsFC2, newFC2, holesFC2] = await Promise.all([
+          fetchJSON(`${DATA}/paths.geojson`).catch(() => null) as Promise<FC<RayFeature> | null>,
+          fetchJSON(`${DATA}/masts.geojson?v=${v}`).catch(() => null) as Promise<FC<MastFeature> | null>,
           fetchJSON(`${DATA}/new_masts.geojson?v=${v}`).catch(() => null) as Promise<FC<MastFeature> | null>,
           fetchJSON(`${DATA}/hotspots.geojson?v=${v}`).catch(() => null) as Promise<HoleFC | null>,
         ]);
         if (cancelled) return;
         if (raysFC2) data.trips = toTrips(raysFC2);
+        if (mastsFC2) data.masts = toMasts(mastsFC2, bounds, false);
         if (newFC2) data.newMasts = toMasts(newFC2, bounds, true);
         if (holesFC2) data.holes = toHoles(holesFC2);
         data.coverageUrl = `${DATA}/coverage.png?v=${v}`;
@@ -1886,6 +1893,25 @@ export function DeckScene({
         lastSig = staticSig(layersRef.current);
       };
       refreshArtifactsRef.current = () => void refreshArtifacts();
+
+      // Out-of-band change detection: the agent-driven nonce only fires in the tab that
+      // ran the tool. A pipeline run, another tab, or a server-side reset also rewrites
+      // the artifacts — poll the tiny summary.json and refresh when its content changes,
+      // so every open tab converges on what is actually on disk.
+      let lastSummary = "";
+      const pollSummary = async () => {
+        try {
+          const r = await fetch(`${DATA}/summary.json?v=${Date.now()}`);
+          if (!r.ok) return;
+          const text = await r.text();
+          if (lastSummary && text !== lastSummary) void refreshArtifacts();
+          lastSummary = text;
+        } catch {
+          /* offline blip — try again next tick */
+        }
+      };
+      void pollSummary();
+      summaryInterval = window.setInterval(() => void pollSummary(), 20_000);
 
       // The decluttered place-label set is recomputed only when the viewport actually moves
       // (zoom/pan/rotate), then reused across frames so the per-frame rebuild hands deck.gl a
@@ -1987,6 +2013,7 @@ export function DeckScene({
     return () => {
       cancelled = true;
       refreshArtifactsRef.current = null;
+      clearInterval(summaryInterval);
       cancelAnimationFrame(raf);
       clearInterval(satInterval);
       if (overlay) overlay.finalize();

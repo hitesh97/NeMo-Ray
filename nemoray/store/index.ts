@@ -492,9 +492,31 @@ export const useNemoStore = create<NemoState>((set, get) => ({
             const proposals = proposalsFromCuopt(e.patch.data);
             if (proposals) next.proposals = proposals;
           }
-          // Clearing the plan empties the Optimiser panel along with the map artifacts.
+          // Clearing the plan empties the Optimiser panel along with the map artifacts,
+          // and resets the client-side outage state — the baseline restore brings every
+          // mast back, so red beacons / hidden rays would contradict the map.
           if (tool?.name === "clear_proposals" && e.patch.status === "success") {
             next.proposals = [];
+            next.deactivatedSiteIds = [];
+          }
+          // The simulation defines what is down NOW: mark exactly the masts the tool
+          // disabled (scenario sets, typed ids, or clicked ids alike) so their beacons
+          // burn red and their rays drop — regardless of how they were chosen.
+          if (
+            tool?.name === "simulate_outage" &&
+            e.patch.status === "success" &&
+            Array.isArray((e.patch.data as { disabled_cells?: unknown })?.disabled_cells)
+          ) {
+            next.deactivatedSiteIds = (
+              (e.patch.data as { disabled_cells: unknown[] }).disabled_cells
+            ).map(String);
+          }
+          // A relocated mast is disabled at its old position.
+          if (tool?.name === "move_mast" && e.patch.status === "success") {
+            const sid = (e.patch.data as { site_id?: unknown })?.site_id;
+            if (typeof sid === "string" && !st.deactivatedSiteIds.includes(sid)) {
+              next.deactivatedSiteIds = [...st.deactivatedSiteIds, sid];
+            }
           }
           // A coverage-mutating tool just finished: the twin rewrote the artifacts
           // (paths/new_masts/hotspots/coverage.png), so nudge the map to re-fetch them.
