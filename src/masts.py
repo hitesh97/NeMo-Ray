@@ -83,6 +83,17 @@ def load_sites(cfg: dict) -> list[Site]:
     return list(sites.values())
 
 
+def sites_in_tiles(sites: list[Site], tiles, half: float) -> list[Site]:
+    """Only the masts standing physically INSIDE one of the given tiles (the simulated
+    footprint). Used to clip the network to the area of interest: masts outside the
+    footprint are excluded from the solve entirely — no fringe transmitters."""
+    kept = []
+    for s in sites:
+        if any(abs(s.e - t.e0) <= half and abs(s.n - t.n0) <= half for t in tiles):
+            kept.append(s)
+    return kept
+
+
 def sites_near(sites: list[Site], e0: float, n0: float, radius: float) -> list[Site]:
     """Sites within `radius` metres of (e0, n0) — used to gather the transmitters that
     illuminate a tile (a mast outside a tile still radiates into it)."""

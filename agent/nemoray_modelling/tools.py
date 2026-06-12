@@ -194,7 +194,7 @@ def _zones_near_sites(
 OUTAGE_CATALOG: dict[str, list[str]] = {
     "high-demand": ["TQ3263381285", "TQ3250081280", "TQ3248081251"],
     "major-event": ["TQ3776480097", "TQ3755080270", "TQ3776079840"],
-    "infrastructure-loss": ["TQ3070081830", "TQ3054081790", "TQ3064081980"],
+    "infrastructure-loss": ["TQ3124081950", "TQ3122082040", "TQ3133081890"],
     "power-outage": ["TQ3448082620", "TQ3483082690", "TQ3481082720"],
 }
 # Used when the operator selected nothing and gave no (or the nominal "live") scenario.

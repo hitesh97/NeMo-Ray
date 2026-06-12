@@ -1,10 +1,10 @@
 {
-  "sites_total": 617,
+  "sites_total": 413,
   "buildings": 65099,
   "simulated_cells": 102400,
-  "served_pct": 99.6533203125,
-  "low_coverage_polys": 64,
-  "ray_paths": 210444,
+  "served_pct": 99.3076171875,
+  "low_coverage_polys": 115,
+  "ray_paths": 305113,
   "masts_emitting_rays": 411,
   "coverage_bounds": {
     "west": -0.1130892982824797,
@@ -15,24 +15,24 @@
   "performance": {
     "device": "NVIDIA GB10",
     "backend": "cuda_ad_mono_polarized",
-    "peak_gpu_util_pct": 96,
-    "mean_gpu_util_pct": 24.3,
+    "peak_gpu_util_pct": 94,
+    "mean_gpu_util_pct": 29.8,
     "peak_gpu_mem_mib": 965,
-    "samples": 331,
+    "samples": 330,
     "coverage_solve": {
       "tiles_solved": 16,
-      "transmitters": 1968,
-      "mean_ms": 733.8,
-      "p50_ms": 551.3,
-      "max_ms": 2102.7
+      "transmitters": 1648,
+      "mean_ms": 587.1,
+      "p50_ms": 354.3,
+      "max_ms": 2021.2
     },
     "radio_map_cells": 102400,
     "ray_trace": {
-      "count": 210444,
-      "total_s": 57.9,
-      "rays_per_s": 3633
+      "count": 305113,
+      "total_s": 61.4,
+      "rays_per_s": 4969
     },
     "mosaic_s": 0.0,
-    "wall_time_s": 90.9
+    "wall_time_s": 92.8
   }
 }

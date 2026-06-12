@@ -23,7 +23,7 @@ from .config import load_config
 from .export import export_all, export_buildings
 from .geo import Tile, grid_for_bbox, tiles_for_subset
 from .gpu import GpuMonitor, device_name
-from .masts import load_sites, sites_near
+from .masts import load_sites, sites_in_tiles, sites_near
 from .mosaic import Mosaic
 from .osm import load_buildings
 from .scene_builder import build_tile_scene
@@ -112,6 +112,14 @@ def run(args):
         tiles = tiles[:args.limit]
     print(f"  {len(tiles)} tiles to simulate")
 
+    # The network IS the area of interest: drop every mast outside the simulated tiles.
+    # No fringe-collar transmitters — boundary tiles show their honest coverage without
+    # help from masts that aren't part of the modelled network.
+    half = cfg["tiling"]["tile_size_m"] / 2
+    n_all = len(sites)
+    sites = sites_in_tiles(sites, tiles, half)
+    print(f"  {len(sites)} of {n_all} masts are inside the simulated footprint")
+
     # Manifest of this run's tiles, so verify/optimise operate on exactly this region
     # (not whatever else is left in the per-tile cache).
     os.makedirs(cfg["paths"]["out_dir"], exist_ok=True)
@@ -181,14 +189,7 @@ def run(args):
     n_bldg = export_buildings(cfg, buildings, mosaic)
     print(f"  exported {n_bldg} building footprints")
     perf["wall_time_s"] = round(time.time() - t_start, 1)
-    # Publish ONLY the masts that participate in this run's solve — the ones within
-    # transmitter range (tile_size/2 + tx_radius_m) of a simulated tile centre. The rest
-    # of the Greater-London inventory never illuminates a solved tile, so exporting it
-    # only bloats the HUD towers, the agent's knowledge graph and the KPI counts.
-    participating = [s for s in sites
-                     if any(sites_near([s], t.e0, t.n0, tx_radius) for t in tiles)]
-    print(f"  {len(participating)} of {len(sites)} masts participate in the simulated area")
-    summary = export_all(cfg, mosaic, participating, rays, n_buildings=n_bldg,
+    summary = export_all(cfg, mosaic, sites, rays, n_buildings=n_bldg,
                          performance=perf, buildings=buildings)
     summary["wall_time_s"] = perf["wall_time_s"]
     print("\n=== Summary ===")

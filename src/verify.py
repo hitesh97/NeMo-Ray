@@ -19,7 +19,7 @@ from . import export
 from . import rt as RT
 from .config import load_config
 from .geo import Tile, lnglat_to_en
-from .masts import Site, load_sites
+from .masts import Site, load_sites, sites_in_tiles
 from .mosaic import Mosaic
 from .osm import load_buildings
 from .scene_builder import build_tile_scene
@@ -92,10 +92,11 @@ def verify(cfg) -> dict:
         return {"verified": False, "reason": "no new masts"}
 
     holes_en = _original_holes(cfg)        # read BEFORE we overwrite hotspots.geojson
-    existing = load_sites(cfg)
-    all_sites = existing + new_masts
     buildings = load_buildings(cfg)
     tiles = _reconstruct_tiles(cfg)
+    # Same footprint clip as the pipeline/resimulate — no fringe transmitters.
+    existing = sites_in_tiles(load_sites(cfg), [t for t, _ in tiles], half)
+    all_sites = existing + new_masts
 
     # Affected = every tile whose solve a new mast can change: a tile's coverage depends on
     # all transmitters within tx_radius of its centre (sites_near in rt.solve_tile), so use

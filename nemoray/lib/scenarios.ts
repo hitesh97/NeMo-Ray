@@ -63,8 +63,8 @@ export const SCENARIOS: Record<ScenarioId, Scenario> = {
     "Infrastructure Loss",
     "Backhaul failure takes a Holborn hub offline — coverage hole opens.",
     {
-      siteIds: ["TQ3070081830", "TQ3054081790", "TQ3064081980"],
-      epicenter: at(-0.118, 51.52),
+      siteIds: ["TQ3124081950", "TQ3122082040", "TQ3133081890"],
+      epicenter: at(-0.1094, 51.5213),
       severity: "critical",
     },
   ),

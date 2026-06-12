@@ -20,7 +20,7 @@ from . import export
 from . import rt as RT
 from .geo import lnglat_to_en
 from .gpu import GpuMonitor, perf_summary
-from .masts import Site, load_sites
+from .masts import Site, load_sites, sites_in_tiles
 from .mosaic import Mosaic
 from .osm import load_buildings
 from .scene_builder import build_tile_scene
@@ -73,14 +73,15 @@ def _affected(cfg, disabled_ids, added):
     max_tiles = int(cfg["cuopt"].get("max_verify_tiles", 60))
 
     disabled_set = {str(x) for x in (disabled_ids or [])}
-    all_sites = load_sites(cfg)
+    tiles = _reconstruct_tiles(cfg)
+    # The network is clipped to the simulated footprint (same rule as the pipeline).
+    all_sites = sites_in_tiles(load_sites(cfg), [t for t, _ in tiles], half)
     by_id = {s.id: s for s in all_sites}
     matched = sorted(disabled_set & by_id.keys())
     unknown = sorted(disabled_set - by_id.keys())
     added_sites = _build_added_sites(cfg, added)
     sites_now = [s for s in all_sites if s.id not in disabled_set] + added_sites
 
-    tiles = _reconstruct_tiles(cfg)
     changed = [by_id[i] for i in matched] + added_sites
     affected = [t for t, _ in tiles
                 if any(abs(c.e - t.e0) <= tx_radius and abs(c.n - t.n0) <= tx_radius
