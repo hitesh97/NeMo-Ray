@@ -26,6 +26,36 @@ from .osm import load_buildings
 from .scene_builder import build_tile_scene
 from .verify import _load_cached, _reconstruct_tiles
 
+# Buildings between the service threshold (-110 dBm) and this are DEGRADED: technically
+# served, but deep in the heatmap's red band — the agent reports them alongside outages.
+DEGRADED_DBM = -100.0
+
+
+def _sample_building_service(cfg, mosaic, thr) -> list[dict]:
+    """Sample the post-change radio map at every emergency-service building and return the
+    ones that are out of service (< thr) or degraded (thr..DEGRADED_DBM). Ground truth per
+    building — point-in-hole-polygon tests under-count campuses sitting in visibly red
+    areas whose 25 m cells hover just above the hole threshold."""
+    from .emergency import load_emergency_features
+    out: list[dict] = []
+    for f in load_emergency_features(cfg):
+        lng, lat = f["geometry"]["coordinates"]
+        e, n = lnglat_to_en(lng, lat)
+        col = int((e - mosaic.e_left) / mosaic.cell)
+        row = int((n - mosaic.n_bottom) / mosaic.cell)
+        if not (0 <= row < mosaic.rows and 0 <= col < mosaic.cols):
+            continue                      # outside the simulated grid entirely
+        if not bool(mosaic.mask[row, col]):
+            continue                      # cell was never simulated — no claim either way
+        dbm = float(mosaic.dbm[row, col]) # NODATA inside the mask = genuinely no signal
+        if dbm < DEGRADED_DBM:
+            p = f["properties"]
+            out.append({"name": p["name"], "kind": p["kind"],
+                        "lat": lat, "lng": lng,
+                        "dbm": round(dbm, 1), "served": bool(dbm >= thr)})
+    out.sort(key=lambda b: b["dbm"])
+    return out[:60]
+
 
 def _write_perf(cfg, perf) -> None:
     """Persist in-session GPU telemetry for the viewer's Compute panel."""
@@ -226,6 +256,7 @@ def _resimulate_uncached(cfg, disabled_ids=None, added=None, trace_rays=False) -
     export.export_coverage(cfg, mosaic)
     hotspots = export.export_hotspots(cfg, mosaic, buildings)
     served = float((mosaic.dbm[mosaic.mask] >= thr).mean() * 100.0)
+    building_service = _sample_building_service(cfg, mosaic, thr)
 
     if trace_rays:
         _write_rays(cfg, ray_dicts, "new_rays.geojson")
@@ -247,6 +278,9 @@ def _resimulate_uncached(cfg, disabled_ids=None, added=None, trace_rays=False) -
         "served_pct": round(served, 2),
         "tiles_resimulated": len(affected_keys),
         "new_rays": len(ray_dicts) if trace_rays else None,
+        # Radio-map truth per emergency building: out of service (< served threshold) or
+        # degraded (threshold..-100 dBm) — the agent reports these, not polygon guesses.
+        "building_service": building_service,
         "performance": perf,
     }
 

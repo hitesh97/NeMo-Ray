@@ -263,15 +263,33 @@ def feature_centroid(feature: dict[str, Any]) -> tuple[float, float] | None:
 DEAD_ZONE_BUFFER_M = 100.0
 
 
+def _ring_distance_m(lat: float, lng: float, ring: list[list[float]]) -> float:
+    """Min distance (m) from a point to a polygon ring's EDGES (local planar approx)."""
+    p = math.pi / 180.0
+    kx, ky = 111320.0 * math.cos(lat * p), 110540.0
+    best = float("inf")
+    n = len(ring)
+    for i in range(n):
+        x1, y1 = ring[i][0], ring[i][1]
+        x2, y2 = ring[(i + 1) % n][0], ring[(i + 1) % n][1]
+        ax, ay = (x1 - lng) * kx, (y1 - lat) * ky
+        bx, by = (x2 - lng) * kx, (y2 - lat) * ky
+        dx, dy = bx - ax, by - ay
+        t = max(0.0, min(1.0, -(ax * dx + ay * dy) / ((dx * dx + dy * dy) or 1e-9)))
+        best = min(best, math.hypot(ax + t * dx, ay + t * dy))
+    return best
+
+
 def buildings_in_zones(
     features: list[dict[str, Any]],
     buildings: list[dict[str, Any]] | None = None,
     buffer_m: float = DEAD_ZONE_BUFFER_M,
 ) -> list[dict[str, Any]]:
-    """Emergency-service buildings that fall inside (or within `buffer_m` of) a dead zone →
-    lost or degraded service. Each hit carries `distance_m` (0 = strictly inside a hole)."""
+    """Emergency-service buildings that fall inside (or within `buffer_m` of the EDGE of)
+    a dead zone → lost or degraded service. Edge distance, not centroid distance — a
+    building beside a large elongated hole is affected even though the hole's centroid is
+    hundreds of metres away. Each hit carries `distance_m` (0 = strictly inside)."""
     buildings = list(buildings if buildings is not None else load_emergency_buildings())
-    centroids = [feature_centroid(f) for f in features]
     hit: list[dict[str, Any]] = []
     for b in buildings:
         chosen: tuple[int, dict[str, Any]] | None = None
@@ -280,12 +298,10 @@ def buildings_in_zones(
             if feature_contains(b["lng"], b["lat"], feat):
                 chosen, chosen_d = (i, feat), 0.0
                 break
-            c = centroids[i]
-            if c is None:
-                continue
-            d = haversine_km(b["lat"], b["lng"], c[1], c[0]) * 1000.0
-            if d <= buffer_m and (chosen_d is None or d < chosen_d):
-                chosen, chosen_d = (i, feat), d
+            for ring in _polys_of(feat):
+                d = _ring_distance_m(b["lat"], b["lng"], ring)
+                if d <= buffer_m and (chosen_d is None or d < chosen_d):
+                    chosen, chosen_d = (i, feat), d
         if chosen is not None:
             i, feat = chosen
             zid = (feat.get("properties") or {}).get("id") or f"dz-{i:02d}"

@@ -1125,8 +1125,18 @@ class ToolRegistry:
                     },
                 )
 
-        affected = buildings_in_zones(feats)
+        # Prefer the twin's per-building radio-map sampling (ground truth at each
+        # building) over polygon intersection: buildings sitting in visibly red areas
+        # whose cells hover just above the hole threshold are DEGRADED, not "fine".
+        bs = summary.get("building_service")
+        if bs is not None:
+            affected = [b for b in bs if not b.get("served")]
+            degraded = [b for b in bs if b.get("served")]
+        else:
+            affected = buildings_in_zones(feats)
+            degraded = []
         counts = self._summarise_buildings(affected)
+        degraded_counts = self._summarise_buildings(degraded)
         dead_zones = []
         for i, f in enumerate(feats):
             c = feature_centroid(f)
@@ -1139,10 +1149,12 @@ class ToolRegistry:
 
         n_aff = len(affected)
         bits = ", ".join(f"{v} {k}" for k, v in counts.items() if v)
+        deg_bits = ", ".join(f"{v} {k}" for k, v in degraded_counts.items() if v)
         result = (
             f"{len(site_ids)} mast(s) offline → {len(dead_zones)} dead zone(s); "
-            f"{n_aff} emergency-service building(s) lose coverage"
+            f"{n_aff} emergency-service building(s) lose service"
             + (f" ({bits})" if bits else "")
+            + (f"; {len(degraded)} more degraded to ≤−100 dBm ({deg_bits})" if degraded else "")
         )
         # ── map directives: mark the affected emergency buildings and fit the camera to the
         # outage extent. The holes themselves are NOT painted as overlay rectangles — the
@@ -1151,8 +1163,15 @@ class ToolRegistry:
         # LLM context stays lean.
         building_markers = [
             {"id": f"aff-{j}", "position": [b["lng"], b["lat"]], "kind": "building",
-             "label": b["name"], "detail": b["kind"].title()}
+             "label": b["name"],
+             "detail": b["kind"].title() + " · NO SERVICE"
+             + (f" ({b['dbm']} dBm)" if b.get("dbm") is not None else "")}
             for j, b in enumerate(affected)
+        ] + [
+            {"id": f"deg-{j}", "position": [b["lng"], b["lat"]], "kind": "building",
+             "label": b["name"],
+             "detail": f"{b['kind'].title()} · degraded ({b['dbm']} dBm)"}
+            for j, b in enumerate(degraded)
         ]
         ui: list[dict[str, Any]] = [{"op": "clear"}]
         ub = _union_bbox([bb for bb in (_feature_bbox(f) for f in feats) if bb])
@@ -1171,10 +1190,16 @@ class ToolRegistry:
                 "dead_zone_count": len(dead_zones),
                 "dead_zones": dead_zones[:8],
                 "affected_buildings": [
-                    {"name": b["name"], "kind": b["kind"], "distance_m": b.get("distance_m")}
+                    {"name": b["name"], "kind": b["kind"],
+                     **({"dbm": b["dbm"]} if b.get("dbm") is not None else {})}
                     for b in affected
                 ],
                 "affected_counts": counts,
+                "degraded_buildings": [
+                    {"name": b["name"], "kind": b["kind"], "dbm": b["dbm"]}
+                    for b in degraded
+                ],
+                "degraded_counts": degraded_counts,
                 "served_pct": summary.get("served_pct"),
                 "tiles_resimulated": summary.get("tiles_resimulated"),
                 "source": source,
