@@ -183,6 +183,25 @@ def _system_prompt(tools: list[ToolSpec]) -> str:
     return "\n".join(lines)
 
 
+def _slim_observation(obs: dict[str, Any], max_chars: int = 4000) -> dict[str, Any]:
+    """A context-budget copy of a tool observation for the LLM. Long candidate/result
+    lists carry full detail to the HUD via the tool_update frame; the model only needs
+    the head of the list to decide its next step."""
+    text = json.dumps(obs)
+    if len(text) <= max_chars:
+        return obs
+    slim = dict(obs)
+    for key in ("candidates", "results", "masts", "dead_zones", "affected_buildings",
+                "alternatives"):
+        v = slim.get(key)
+        if isinstance(v, list) and len(v) > 10:
+            slim[key] = v[:10] + [{"note": f"... {len(v) - 10} more omitted for brevity"}]
+    text = json.dumps(slim)
+    if len(text) > max_chars * 2:  # pathological payload — hard cap, keep valid JSON out
+        return {"summary": text[: max_chars * 2] + "…(truncated)"}
+    return slim
+
+
 def _recent_history(
     history: list[dict[str, str]] | None, max_turns: int
 ) -> list[dict[str, str]]:
@@ -294,12 +313,15 @@ def run_agent(
         for action in getattr(result, "ui_actions", None) or []:
             yield map_action(action)
 
-        # Feed the assistant's action + the tool observation back into the loop.
+        # Feed the assistant's action + the tool observation back into the loop. The HUD
+        # gets the FULL observation (tool_update data above); the model's copy is slimmed —
+        # a 45-candidate cuOpt dump across several steps can blow the 16k context window
+        # and 400 the NIM mid-run.
         messages.append({"role": "assistant", "content": json.dumps(decision)})
         messages.append(
             {
                 "role": "user",
-                "content": "OBSERVATION " + json.dumps(result.observation),
+                "content": "OBSERVATION " + json.dumps(_slim_observation(result.observation)),
             }
         )
 

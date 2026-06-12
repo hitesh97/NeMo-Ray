@@ -719,6 +719,27 @@ class ToolRegistry:
         # proposals. With the twin down, degrade to the REAL cuOpt plan the pipeline last wrote
         # (new_masts.geojson). With neither, return an honest error — never invented candidates.
         exclude = set(args.get("exclude", []) or [])
+        # An exclusion re-pick (reject → retry after a failed validation) chooses an
+        # ALTERNATIVE from the already-verified plan — answer it from the artifact in
+        # seconds instead of re-running the whole multi-minute optimise loop on the twin.
+        if exclude:
+            candidates = self._cuopt_candidates_from_artifact()
+            if candidates:
+                avail = [c for c in candidates if c["candidate_id"] not in exclude] or candidates
+                pick = max(avail, key=lambda c: c.get("covers_holes") or 0)
+                return ToolResult(
+                    result=f"Alternative pick from the verified plan: {pick['label']} "
+                    f"(+{round(pick['coverage_gain_pct'] * 100)}% coverage, "
+                    f"£{pick['est_cost_gbp']:,})",
+                    observation={
+                        "candidate": pick,
+                        "candidates": self._lean_candidates(candidates),
+                        "candidate_count": len(candidates),
+                        "excluded": sorted(exclude),
+                        "source": "cuOpt output artifact (new_masts.geojson)",
+                    },
+                    ui_actions=self._candidates_ui(candidates, pick),
+                )
         twin = self._twin_url()
         if twin:
             real = self._cuopt_via_twin(twin, exclude)  # warns on its own degradation
