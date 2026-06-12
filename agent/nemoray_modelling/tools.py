@@ -610,7 +610,7 @@ class ToolRegistry:
         # holes the pipeline wrote (hotspots.geojson — exactly the dashboard heatmap's dead
         # zones). With neither, return an honest error — never invented zones.
         disabled = list(args.get("disabled_cells", []) or [])
-        twin = os.environ.get("TWIN_URL", "").rstrip("/")
+        twin = self._twin_url()
         if twin:
             real = self._coverage_via_twin(twin, disabled)  # warns on its own degradation
             if real is not None:
@@ -719,7 +719,7 @@ class ToolRegistry:
         # proposals. With the twin down, degrade to the REAL cuOpt plan the pipeline last wrote
         # (new_masts.geojson). With neither, return an honest error — never invented candidates.
         exclude = set(args.get("exclude", []) or [])
-        twin = os.environ.get("TWIN_URL", "").rstrip("/")
+        twin = self._twin_url()
         if twin:
             real = self._cuopt_via_twin(twin, exclude)  # warns on its own degradation
             if real is not None:
@@ -993,7 +993,10 @@ class ToolRegistry:
     # ── shared twin helpers (used by outage / move / COW) ───────────────────────
     @staticmethod
     def _twin_url() -> str:
-        return os.environ.get("TWIN_URL", "").rstrip("/")
+        # Default to the local twin (the stack is co-resident on the Spark) — mirrors the
+        # NEMOTRON_BASE_URL default, so a missing env var can't sever the agent from a
+        # twin running right next to it. Set TWIN_URL="" explicitly to force offline mode.
+        return os.environ.get("TWIN_URL", "http://localhost:8000").rstrip("/")
 
     @staticmethod
     def _post_coverage(

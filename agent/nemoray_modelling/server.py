@@ -119,7 +119,7 @@ def health() -> dict[str, Any]:
         "nemotron_base_url": base_url,
         "nemotron_model": os.getenv("NEMOTRON_MODEL", NEMOTRON_MODEL),
         "nemotron_reachable": _nim_reachable(base_url),
-        "twin_url": os.getenv("TWIN_URL", ""),
+        "twin_url": os.getenv("TWIN_URL", "http://localhost:8000"),
     }
 
 
