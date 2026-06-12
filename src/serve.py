@@ -43,6 +43,19 @@ def _change_label(disabled, added, result) -> str:
     return f"{head} · {holes} holes" if holes is not None else head
 
 
+# One optimisation at a time: the closed loop (cuOpt + RT verify) can run for many
+# minutes and owns the GPU + artifacts while it does. Other GPU work (coverage re-sims)
+# and artifact mutations (clear_proposals) report busy instead of stacking behind it —
+# a stacked request used to keep running after the client timed out, fighting the GPU
+# and rewriting artifacts long after the operator stopped waiting.
+_OPTIMIZE_BUSY = threading.Lock()
+
+
+def _busy() -> dict:
+    return {"error": "the mast-placement optimiser is running — retry when it completes",
+            "busy": True}
+
+
 # Absolute artifacts dir (config paths.out_dir, already root-resolved by load_config).
 # The agent + HUD fetch the live artifacts at the stable URL prefix /out/, but on this
 # branch the pipeline publishes them to nemoray/public/raytracing (so a fresh run shows up
@@ -99,6 +112,8 @@ class Handler(SimpleHTTPRequestHandler):
     # ── API actions ──────────────────────────────────────────────────────────────
     def _run_coverage(self):
         from . import resimulate as R
+        if _OPTIMIZE_BUSY.locked():
+            return _busy()
         body = self._body()
         cfg = load_config()
         disabled = body.get("disabled_site_ids") or []
@@ -129,13 +144,22 @@ class Handler(SimpleHTTPRequestHandler):
         # Closed loop: cuOpt proposes, Sionna RT verifies, residual holes re-optimise —
         # so the returned plan actually serves 100% of the outdoor holes under real
         # ray-traced propagation (optimize_to_target), not just the planner's circles.
-        from . import optimize as optimizer
-        cfg = load_config()
-        result = optimizer.optimize_to_target(cfg)
-        meta = history.snapshot(cfg, f"cuOpt: +{result.get('new_masts', 0)} masts",
-                                extra={"served_pct": result.get("served_pct_after")})
-        result["state_id"] = meta["id"]
-        return result
+        # From a clean baseline this runs for MINUTES (multiple GPU verify rounds) —
+        # exactly one runs at a time, and the GPU lock keeps re-sims out while it does.
+        if not _OPTIMIZE_BUSY.acquire(blocking=False):
+            return _busy()
+        try:
+            from . import optimize as optimizer
+            from . import resimulate as R
+            cfg = load_config()
+            with R._RESIM_LOCK:  # the de-facto GPU lock — no concurrent solves
+                result = optimizer.optimize_to_target(cfg)
+            meta = history.snapshot(cfg, f"cuOpt: +{result.get('new_masts', 0)} masts",
+                                    extra={"served_pct": result.get("served_pct_after")})
+            result["state_id"] = meta["id"]
+            return result
+        finally:
+            _OPTIMIZE_BUSY.release()
 
     def _run_emergency(self):
         cfg = load_config()
@@ -179,6 +203,8 @@ class Handler(SimpleHTTPRequestHandler):
         new_masts, …) and strip the proposed masts' rays (operator EE-new) from the master
         paths.geojson — which history snapshots deliberately exclude. The cleared state is
         snapshotted so it can itself be reverted."""
+        if _OPTIMIZE_BUSY.locked():
+            return _busy()
         from . import export
         cfg = load_config()
         states = history.list_states(cfg)

@@ -232,6 +232,16 @@ TOOL_LABELS: dict[str, str] = {
 }
 
 
+def _busy_result(tool: str) -> "ToolResult":
+    """The twin reports the mast-placement optimiser owns the GPU right now."""
+    return ToolResult(
+        result="The mast-placement optimiser is running on the twin right now — it owns "
+        "the GPU and the plan artifacts. Wait for it to finish (the proposals will appear "
+        "on the map), then retry.",
+        observation={"error": "optimiser busy", "busy": True, "source": "coverage twin"},
+    )
+
+
 @dataclass
 class ToolResult:
     result: str
@@ -827,10 +837,15 @@ class ToolRegistry:
         import httpx
 
         try:
-            with httpx.Client(base_url=twin, timeout=600.0) as client:
+            # The closed loop (multi-round cuOpt + GPU verification) legitimately runs for
+            # ~15 minutes from a clean baseline — give it room; the HUD tool card shows
+            # "running" the whole time.
+            with httpx.Client(base_url=twin, timeout=1800.0) as client:
                 r = client.post("/api/optimize")
                 r.raise_for_status()
                 summary = r.json()
+                if summary.get("busy"):
+                    return _busy_result("run_cuopt")
                 g = client.get("/out/new_masts.geojson")
                 g.raise_for_status()
                 feats = g.json().get("features", [])
@@ -999,6 +1014,8 @@ class ToolRegistry:
                 )
                 r.raise_for_status()
                 summary = r.json()
+                if summary.get("busy"):
+                    return summary, []
                 g = client.get("/out/hotspots.geojson")
                 g.raise_for_status()
                 feats = g.json().get("features", [])
@@ -1045,6 +1062,8 @@ class ToolRegistry:
 
         if twin:
             res = self._post_coverage(twin, list(site_ids))
+            if res is not None and res[0].get("busy"):
+                return _busy_result("simulate_outage")
             if res is not None and res[0].get("disabled_matched"):
                 summary, feats = res
                 # Clip the twin's scene-wide holes to the outage neighbourhood — otherwise every
@@ -1150,6 +1169,8 @@ class ToolRegistry:
         twin = self._twin_url()
         if twin:
             res = self._post_coverage(twin, [site_id], added)
+            if res is not None and res[0].get("busy"):
+                return _busy_result("move_mast")
             if res is not None and (res[0].get("disabled_matched") or res[0].get("added")):
                 summary = res[0]
                 holes = summary.get("coverage_holes")
@@ -1301,6 +1322,9 @@ class ToolRegistry:
         verified = None
         if twin:
             res = self._post_coverage(twin, disabled, [cow])
+            if res is not None and res[0].get("busy"):
+                res = None
+                _warn_degraded("deploy_cow", "optimiser busy — COW hole-closure not verified")
             if res is not None:
                 after = res[0].get("coverage_holes")
                 before = len(feats)
@@ -1833,6 +1857,8 @@ class ToolRegistry:
                 r = client.post("/api/clear_proposals")
                 r.raise_for_status()
                 summary = r.json()
+                if summary.get("busy"):
+                    return _busy_result("clear_proposals")
         except Exception as exc:
             _warn_degraded("clear_proposals", f"twin /api/clear_proposals failed ({exc!r})")
             return ToolResult(
